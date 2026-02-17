@@ -1,0 +1,5 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_clover_terminal_manager,clover.terminal manager,model_clover_terminal,point_of_sale.group_pos_manager,1,1,1,1
+access_clover_terminal_user,clover.terminal user,model_clover_terminal,point_of_sale.group_pos_user,1,0,0,0
+access_clover_log_manager,clover.transaction.log manager,model_clover_transaction_log,point_of_sale.group_pos_manager,1,1,1,1
+access_clover_log_user,clover.transaction.log user,model_clover_transaction_log,point_of_sale.group_pos_user,1,0,0,0

@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ============================================================ -->
+    <!-- Clover Terminal : Form                                       -->
+    <!-- ============================================================ -->
+    <record id="clover_terminal_view_form" model="ir.ui.view">
+        <field name="name">clover.terminal.form</field>
+        <field name="model">clover.terminal</field>
+        <field name="arch" type="xml">
+            <form string="Clover Terminal">
+                <header>
+                    <button name="action_test_connection"
+                            type="object"
+                            string="Test Connection"
+                            class="btn-primary"
+                            invisible="state == 'active'"/>
+                    <button name="action_activate"
+                            type="object"
+                            string="Activate"
+                            class="btn-success"
+                            invisible="state not in ('testing', 'error')"/>
+                    <button name="action_reset_draft"
+                            type="object"
+                            string="Reset"
+                            invisible="state == 'draft'"/>
+                    <field name="state" widget="statusbar"
+                           statusbar_visible="draft,testing,active"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box"/>
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1>
+                            <field name="name"
+                                   placeholder='e.g. "Front Counter Flex 4"'/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group string="Clover Configuration">
+                            <field name="environment"/>
+                            <field name="merchant_id"
+                                   placeholder="e.g. ABC123XYZ"/>
+                            <field name="device_id"
+                                   placeholder="e.g. C045PQ00001234"/>
+                        </group>
+                        <group string="Authentication">
+                            <field name="api_token" password="True"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Device Info">
+                            <field name="merchant_name"/>
+                            <field name="device_model"/>
+                            <field name="last_ping"/>
+                            <field name="company_id"
+                                   groups="base.group_multi_company"/>
+                            <field name="active"/>
+                        </group>
+                        <group string="Diagnostics"
+                               invisible="not last_error">
+                            <field name="last_error" readonly="1"/>
+                        </group>
+                    </group>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- Clover Terminal : List                                       -->
+    <!-- ============================================================ -->
+    <record id="clover_terminal_view_tree" model="ir.ui.view">
+        <field name="name">clover.terminal.tree</field>
+        <field name="model">clover.terminal</field>
+        <field name="arch" type="xml">
+            <list string="Clover Terminals">
+                <field name="name"/>
+                <field name="environment" widget="badge"
+                       decoration-info="environment == 'sandbox'"
+                       decoration-success="environment == 'production'"/>
+                <field name="merchant_id"/>
+                <field name="device_id"/>
+                <field name="device_model" optional="show"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'active'"
+                       decoration-warning="state == 'testing'"
+                       decoration-danger="state == 'error'"/>
+                <field name="last_ping" optional="show"/>
+                <field name="company_id" groups="base.group_multi_company"
+                       optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- Clover Terminal : Search                                     -->
+    <!-- ============================================================ -->
+    <record id="clover_terminal_view_search" model="ir.ui.view">
+        <field name="name">clover.terminal.search</field>
+        <field name="model">clover.terminal</field>
+        <field name="arch" type="xml">
+            <search string="Clover Terminals">
+                <field name="name"/>
+                <field name="merchant_id"/>
+                <field name="device_id"/>
+                <filter name="active_terminals" string="Active"
+                        domain="[('state', '=', 'active')]"/>
+                <filter name="sandbox" string="Sandbox"
+                        domain="[('environment', '=', 'sandbox')]"/>
+                <filter name="production" string="Production"
+                        domain="[('environment', '=', 'production')]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_state" string="Status"
+                            context="{'group_by': 'state'}"/>
+                    <filter name="group_env" string="Environment"
+                            context="{'group_by': 'environment'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- Clover Terminal : Window Action                              -->
+    <!-- ============================================================ -->
+    <record id="action_clover_terminal" model="ir.actions.act_window">
+        <field name="name">Clover Terminals</field>
+        <field name="res_model">clover.terminal</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Configure your first Clover terminal
+            </p>
+            <p>
+                Add your Clover Flex 4 device with its Merchant ID,
+                Device ID, and API Access Token from the Clover
+                Developer Dashboard. Then click <b>Test Connection</b>.
+            </p>
+        </field>
+    </record>
+
+</odoo>

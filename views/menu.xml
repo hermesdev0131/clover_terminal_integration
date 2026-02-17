@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Parent: Point of Sale > Configuration > Clover -->
+    <menuitem id="menu_clover_root"
+              name="Clover"
+              parent="point_of_sale.menu_point_config_product"
+              sequence="50"/>
+
+    <!-- Terminals -->
+    <menuitem id="menu_clover_terminals"
+              name="Terminals"
+              parent="menu_clover_root"
+              action="action_clover_terminal"
+              sequence="10"/>
+
+    <!-- Transaction Logs -->
+    <menuitem id="menu_clover_logs"
+              name="Transaction Logs"
+              parent="menu_clover_root"
+              action="action_clover_transaction_log"
+              sequence="20"/>
+
+</odoo>

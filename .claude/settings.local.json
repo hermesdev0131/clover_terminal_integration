@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:community.clover.com)",
+      "WebFetch(domain:docs.clover.com)",
+      "WebFetch(domain:apps.odoo.com)",
+      "WebFetch(domain:www.mercadopago.com.br)"
+    ]
+  }
+}

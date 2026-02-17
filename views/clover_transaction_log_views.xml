@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ============================================================ -->
+    <!-- Transaction Log : Form                                       -->
+    <!-- ============================================================ -->
+    <record id="clover_transaction_log_view_form" model="ir.ui.view">
+        <field name="name">clover.transaction.log.form</field>
+        <field name="model">clover.transaction.log</field>
+        <field name="arch" type="xml">
+            <form string="Transaction Log" create="false" edit="false">
+                <header>
+                    <field name="status" widget="statusbar"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group string="Request">
+                            <field name="request_id"/>
+                            <field name="terminal_id"/>
+                            <field name="http_method"/>
+                            <field name="endpoint"/>
+                            <field name="http_status"/>
+                            <field name="create_date"/>
+                        </group>
+                        <group string="References">
+                            <field name="clover_payment_id"/>
+                            <field name="pos_order_id"/>
+                            <field name="pos_session_id"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Request Payload" name="request">
+                            <field name="request_payload"/>
+                        </page>
+                        <page string="Response Payload" name="response">
+                            <field name="response_payload"/>
+                        </page>
+                        <page string="Error" name="error"
+                              invisible="not error_message">
+                            <field name="error_message"/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- Transaction Log : List                                       -->
+    <!-- ============================================================ -->
+    <record id="clover_transaction_log_view_tree" model="ir.ui.view">
+        <field name="name">clover.transaction.log.tree</field>
+        <field name="model">clover.transaction.log</field>
+        <field name="arch" type="xml">
+            <list string="Transaction Logs" create="false" edit="false"
+                  default_order="create_date desc">
+                <field name="create_date" string="Time"/>
+                <field name="terminal_id"/>
+                <field name="http_method" column_invisible="True"/>
+                <field name="endpoint"/>
+                <field name="http_status"/>
+                <field name="clover_payment_id" optional="show"/>
+                <field name="status" widget="badge"
+                       decoration-success="status == 'success'"
+                       decoration-danger="status in ('error', 'timeout')"
+                       decoration-warning="status == 'pending'"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- Transaction Log : Search                                     -->
+    <!-- ============================================================ -->
+    <record id="clover_transaction_log_view_search" model="ir.ui.view">
+        <field name="name">clover.transaction.log.search</field>
+        <field name="model">clover.transaction.log</field>
+        <field name="arch" type="xml">
+            <search string="Transaction Logs">
+                <field name="request_id"/>
+                <field name="clover_payment_id"/>
+                <field name="endpoint"/>
+                <field name="terminal_id"/>
+                <filter name="errors" string="Errors"
+                        domain="[('status', 'in', ('error', 'timeout'))]"/>
+                <filter name="today" string="Today"
+                        domain="[('create_date', '&gt;=',
+                                  (context_today()).strftime('%%Y-%%m-%%d'))]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_status" string="Status"
+                            context="{'group_by': 'status'}"/>
+                    <filter name="group_terminal" string="Terminal"
+                            context="{'group_by': 'terminal_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- Transaction Log : Window Action                              -->
+    <!-- ============================================================ -->
+    <record id="action_clover_transaction_log" model="ir.actions.act_window">
+        <field name="name">API Transaction Logs</field>
+        <field name="res_model">clover.transaction.log</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{'search_default_today': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No API calls logged yet
+            </p>
+            <p>
+                Every Clover API request/response is recorded here
+                for auditing and debugging.
+            </p>
+        </field>
+    </record>
+
+</odoo>
