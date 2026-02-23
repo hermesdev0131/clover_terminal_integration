@@ -67,13 +67,18 @@ class CloverTerminal(models.Model):
         string='Merchant ID',
         required=True,
         tracking=True,
-        help='Clover Merchant ID (mId)',
+        help='Clover Merchant ID (from dashboard URL)',
     )
-    device_id = fields.Char(
-        string='Device ID',
+    device_serial = fields.Char(
+        string='Device Serial',
         required=True,
         tracking=True,
-        help='Clover device serial or ID',
+        help='Serial number printed on device (e.g. C046LT52640523)',
+    )
+    clover_device_id = fields.Char(
+        string='Clover Device ID',
+        readonly=True,
+        help='UUID resolved automatically from serial during connection test',
     )
     api_token = fields.Char(
         string='API Access Token',
@@ -103,7 +108,7 @@ class CloverTerminal(models.Model):
     device_model = fields.Char(string='Device Model', readonly=True)
 
     _sql_constraints = [
-        ('unique_device', 'unique(merchant_id, device_id, company_id)',
+        ('unique_device', 'unique(merchant_id, device_serial, company_id)',
          'This device is already registered for this merchant.'),
     ]
 
@@ -197,8 +202,22 @@ class CloverTerminal(models.Model):
     # Connection testing  (Phase 1 deliverable)
     # ------------------------------------------------------------------
 
+    def _resolve_device_by_serial(self):
+        """Find Clover device UUID by serial number."""
+        self.ensure_one()
+        devices = self._api_request(
+            'GET', f'/v3/merchants/{self.merchant_id}/devices',
+        )
+        for dev in devices.get('elements', []):
+            if dev.get('serial') == self.device_serial:
+                return dev
+        raise UserError(_(
+            'No device with serial "%(serial)s" found for this merchant.',
+            serial=self.device_serial,
+        ))
+
     def action_test_connection(self):
-        """Fetch merchant info + device info to validate credentials."""
+        """Fetch merchant info + resolve device by serial number."""
         self.ensure_one()
         try:
             # 1) Verify merchant
@@ -207,18 +226,17 @@ class CloverTerminal(models.Model):
             )
             merchant_name = merchant.get('name', '?')
 
-            # 2) Verify device exists under this merchant
-            device = self._api_request(
-                'GET',
-                f'/v3/merchants/{self.merchant_id}/devices/{self.device_id}',
-            )
-            device_model = device.get('model', device.get('deviceTypeName', ''))
+            # 2) Find device by serial number → get UUID
+            device = self._resolve_device_by_serial()
+            clover_device_id = device.get('id')
+            device_model = device.get('productName', device.get('model', ''))
 
             self.write({
                 'state': 'testing',
                 'last_ping': fields.Datetime.now(),
                 'last_error': False,
                 'merchant_name': merchant_name,
+                'clover_device_id': clover_device_id,
                 'device_model': device_model,
             })
             return {
@@ -227,9 +245,9 @@ class CloverTerminal(models.Model):
                 'params': {
                     'title': _('Connection OK'),
                     'message': _(
-                        'Merchant: %(merchant)s — Device: %(device)s (%(model)s)',
+                        'Merchant: %(merchant)s — Device: %(serial)s (%(model)s)',
                         merchant=merchant_name,
-                        device=self.device_id,
+                        serial=self.device_serial,
                         model=device_model or 'Flex',
                     ),
                     'type': 'success',
@@ -259,10 +277,12 @@ class CloverTerminal(models.Model):
     def check_device_online(self):
         """Return True/False whether device responds."""
         self.ensure_one()
+        if not self.clover_device_id:
+            return False
         try:
             self._api_request(
                 'GET',
-                f'/v3/merchants/{self.merchant_id}/devices/{self.device_id}',
+                f'/v3/merchants/{self.merchant_id}/devices/{self.clover_device_id}',
                 timeout=10,
             )
             self.last_ping = fields.Datetime.now()

@@ -40,9 +40,9 @@
                         <group string="Clover Configuration">
                             <field name="environment"/>
                             <field name="merchant_id"
-                                   placeholder="e.g. ABC123XYZ"/>
-                            <field name="device_id"
-                                   placeholder="e.g. C045PQ00001234"/>
+                                   placeholder="e.g. 24TRB7DSZNKK1"/>
+                            <field name="device_serial"
+                                   placeholder="e.g. C046LT52640523"/>
                         </group>
                         <group string="Authentication">
                             <field name="api_token" password="True"/>
@@ -52,6 +52,7 @@
                         <group string="Device Info">
                             <field name="merchant_name"/>
                             <field name="device_model"/>
+                            <field name="clover_device_id"/>
                             <field name="last_ping"/>
                             <field name="company_id"
                                    groups="base.group_multi_company"/>
@@ -81,7 +82,7 @@
                        decoration-info="environment == 'sandbox'"
                        decoration-success="environment in ('production_na', 'production_eu', 'production_la')"/>
                 <field name="merchant_id"/>
-                <field name="device_id"/>
+                <field name="device_serial"/>
                 <field name="device_model" optional="show"/>
                 <field name="state" widget="badge"
                        decoration-success="state == 'active'"
@@ -104,7 +105,7 @@
             <search string="Clover Terminals">
                 <field name="name"/>
                 <field name="merchant_id"/>
-                <field name="device_id"/>
+                <field name="device_serial"/>
                 <filter name="active_terminals" string="Active"
                         domain="[('state', '=', 'active')]"/>
                 <filter name="sandbox" string="Sandbox"
