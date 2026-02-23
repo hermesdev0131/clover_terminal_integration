@@ -67,7 +67,7 @@ class CloverTerminal(models.Model):
         string='Merchant ID',
         required=True,
         tracking=True,
-        help='Clover Merchant ID (from dashboard URL)',
+        help='Clover Merchant ID (Account & Setup → Merchants)',
     )
     device_serial = fields.Char(
         string='Device Serial',
@@ -252,6 +252,13 @@ class CloverTerminal(models.Model):
                     ),
                     'type': 'success',
                     'sticky': False,
+                    'next': {
+                        'type': 'ir.actions.act_window',
+                        'res_model': 'clover.terminal',
+                        'res_id': self.id,
+                        'views': [(False, 'form')],
+                        'target': 'current',
+                    },
                 },
             }
         except UserError as exc:

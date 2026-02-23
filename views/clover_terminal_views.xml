@@ -48,7 +48,7 @@
                             <field name="api_token" password="True"/>
                         </group>
                     </group>
-                    <group>
+                    <group invisible="state == 'draft'">
                         <group string="Device Info">
                             <field name="merchant_name"/>
                             <field name="device_model"/>
