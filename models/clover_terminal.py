@@ -9,15 +9,23 @@ from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
 
-# Clover environment URLs
+# Clover environment URLs (regional)
 CLOVER_ENV = {
     'sandbox': {
         'api_base': 'https://apisandbox.dev.clover.com',
         'web_base': 'https://sandbox.dev.clover.com',
     },
-    'production': {
+    'production_na': {
         'api_base': 'https://api.clover.com',
         'web_base': 'https://www.clover.com',
+    },
+    'production_eu': {
+        'api_base': 'https://api.eu.clover.com',
+        'web_base': 'https://www.eu.clover.com',
+    },
+    'production_la': {
+        'api_base': 'https://api.la.clover.com',
+        'web_base': 'https://www.la.clover.com',
     },
 }
 
@@ -46,7 +54,10 @@ class CloverTerminal(models.Model):
         help='Friendly name (e.g. "Front Counter Flex 4")',
     )
     environment = fields.Selection(
-        [('sandbox', 'Sandbox'), ('production', 'Production')],
+        [('sandbox', 'Sandbox'),
+         ('production_na', 'Production (North America)'),
+         ('production_eu', 'Production (Europe)'),
+         ('production_la', 'Production (Latin America)')],
         string='Environment',
         required=True,
         default='sandbox',

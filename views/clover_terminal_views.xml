@@ -79,7 +79,7 @@
                 <field name="name"/>
                 <field name="environment" widget="badge"
                        decoration-info="environment == 'sandbox'"
-                       decoration-success="environment == 'production'"/>
+                       decoration-success="environment in ('production_na', 'production_eu', 'production_la')"/>
                 <field name="merchant_id"/>
                 <field name="device_id"/>
                 <field name="device_model" optional="show"/>
@@ -110,7 +110,7 @@
                 <filter name="sandbox" string="Sandbox"
                         domain="[('environment', '=', 'sandbox')]"/>
                 <filter name="production" string="Production"
-                        domain="[('environment', '=', 'production')]"/>
+                        domain="[('environment', 'in', ('production_na', 'production_eu', 'production_la'))]"/>
                 <group expand="0" string="Group By">
                     <filter name="group_state" string="Status"
                             context="{'group_by': 'state'}"/>

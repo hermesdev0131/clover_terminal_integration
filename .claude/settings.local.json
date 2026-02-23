@@ -4,7 +4,12 @@
       "WebFetch(domain:community.clover.com)",
       "WebFetch(domain:docs.clover.com)",
       "WebFetch(domain:apps.odoo.com)",
-      "WebFetch(domain:www.mercadopago.com.br)"
+      "WebFetch(domain:www.mercadopago.com.br)",
+      "Bash(wc:*)",
+      "Bash(echo:*)",
+      "Bash(python3:*)",
+      "Bash(python -c:*)",
+      "Bash(python:*)"
     ]
   }
 }
