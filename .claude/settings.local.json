@@ -14,7 +14,9 @@
       "Bash(# Check what country this IP resolves to curl -s \"\"https://ipinfo.io/91.222.19.82/json\"\")",
       "Bash(ssh -p5489 -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@149.50.131.243 \"curl -s https://ipinfo.io/json 2>/dev/null | python3 -m json.tool 2>/dev/null || curl -s https://ipinfo.io/json\")",
       "Bash(ssh -p5489 -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@149.50.131.243 \"\necho ''=== Test 1: Merchant info ===''\ncurl -s -w ''\\\\nHTTP_STATUS: %{http_code}\\\\n''   -H ''Authorization: Bearer fb731870-d1aa-541e-99e4-b5a7e4616200''   -H ''Accept: application/json''   ''https://api.la.clover.com/v3/merchants/24TRB7DSZNKK1''\n\necho ''''\necho ''=== Test 2: Device by ID ===''\ncurl -s -w ''\\\\nHTTP_STATUS: %{http_code}\\\\n''   -H ''Authorization: Bearer fb731870-d1aa-541e-99e4-b5a7e4616200''   -H ''Accept: application/json''   ''https://api.la.clover.com/v3/merchants/24TRB7DSZNKK1/devices/C046LT52640523''\n\necho ''''\necho ''=== Test 3: List all devices ===''\ncurl -s -w ''\\\\nHTTP_STATUS: %{http_code}\\\\n''   -H ''Authorization: Bearer fb731870-d1aa-541e-99e4-b5a7e4616200''   -H ''Accept: application/json''   ''https://api.la.clover.com/v3/merchants/24TRB7DSZNKK1/devices''\n\")",
-      "Bash(ssh:*)"
+      "Bash(ssh:*)",
+      "WebFetch(domain:www.odoo.com)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

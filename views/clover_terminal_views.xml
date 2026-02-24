@@ -10,11 +10,17 @@
         <field name="arch" type="xml">
             <form string="Clover Terminal">
                 <header>
+                    <button name="action_authorize"
+                            type="object"
+                            string="Authorize"
+                            class="btn-warning"
+                            invisible="token_acquired or state == 'active'"
+                            help="Open Clover OAuth page to acquire API token"/>
                     <button name="action_test_connection"
                             type="object"
                             string="Test Connection"
                             class="btn-primary"
-                            invisible="state == 'active'"/>
+                            invisible="not token_acquired or state == 'active'"/>
                     <button name="action_activate"
                             type="object"
                             string="Activate"
@@ -43,9 +49,16 @@
                                    placeholder="e.g. 24TRB7DSZNKK1"/>
                             <field name="device_serial"
                                    placeholder="e.g. C046LT52640523"/>
+                            <field name="app_id"
+                                   placeholder="e.g. R9126BVSNOJYY"/>
+                            <field name="raid"
+                                   placeholder="e.g. 4YFRTCTS6SMFT.R9126BVSNOJYY"/>
                         </group>
                         <group string="Authentication">
+                            <field name="app_secret" password="True"/>
                             <field name="api_token" password="True"/>
+                            <field name="token_acquired" widget="boolean"
+                                   invisible="1"/>
                         </group>
                     </group>
                     <group invisible="state == 'draft'">
@@ -134,9 +147,10 @@
                 Configure your first Clover terminal
             </p>
             <p>
-                Add your Clover Flex 4 device with its Merchant ID,
-                Device ID, and API Access Token from the Clover
-                Developer Dashboard. Then click <b>Test Connection</b>.
+                Add your Clover Flex 4 device with Merchant ID,
+                Device Serial, App ID, App Secret, and RAID from the
+                Clover Developer Dashboard. Click <b>Authorize</b> to
+                acquire the API token, then <b>Test Connection</b>.
             </p>
         </field>
     </record>

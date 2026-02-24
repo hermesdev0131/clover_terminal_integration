@@ -14,18 +14,22 @@ CLOVER_ENV = {
     'sandbox': {
         'api_base': 'https://apisandbox.dev.clover.com',
         'web_base': 'https://sandbox.dev.clover.com',
+        'oauth_base': 'https://sandbox.dev.clover.com',
     },
     'production_na': {
         'api_base': 'https://api.clover.com',
         'web_base': 'https://www.clover.com',
+        'oauth_base': 'https://www.clover.com',
     },
     'production_eu': {
         'api_base': 'https://api.eu.clover.com',
         'web_base': 'https://www.eu.clover.com',
+        'oauth_base': 'https://eu.clover.com',
     },
     'production_la': {
         'api_base': 'https://api.la.clover.com',
         'web_base': 'https://www.la.clover.com',
+        'oauth_base': 'https://la.clover.com',
     },
 }
 
@@ -80,11 +84,35 @@ class CloverTerminal(models.Model):
         readonly=True,
         help='UUID resolved automatically from serial during connection test',
     )
-    api_token = fields.Char(
-        string='API Access Token',
+
+    # OAuth credentials
+    app_id = fields.Char(
+        string='App ID',
+        required=True,
+        tracking=True,
+        help='Clover App ID from Developer Dashboard (App Settings)',
+    )
+    app_secret = fields.Char(
+        string='App Secret',
         required=True,
         groups='point_of_sale.group_pos_manager',
-        help='OAuth access token from Clover Developer Dashboard',
+        help='Clover App Secret from Developer Dashboard (App Settings)',
+    )
+    raid = fields.Char(
+        string='RAID',
+        required=True,
+        tracking=True,
+        help='Remote Application ID from App Settings (e.g. 4YFRTCTS6SMFT.R9126BVSNOJYY)',
+    )
+    api_token = fields.Char(
+        string='API Access Token',
+        readonly=True,
+        groups='point_of_sale.group_pos_manager',
+        help='OAuth access token — acquired automatically via Authorize flow',
+    )
+    token_acquired = fields.Boolean(
+        string='Token Acquired',
+        compute='_compute_token_acquired',
     )
     company_id = fields.Many2one(
         'res.company',
@@ -113,6 +141,15 @@ class CloverTerminal(models.Model):
     ]
 
     # ------------------------------------------------------------------
+    # Computed fields
+    # ------------------------------------------------------------------
+
+    @api.depends('api_token')
+    def _compute_token_acquired(self):
+        for rec in self:
+            rec.token_acquired = bool(rec.api_token)
+
+    # ------------------------------------------------------------------
     # URL / header helpers
     # ------------------------------------------------------------------
 
@@ -120,7 +157,12 @@ class CloverTerminal(models.Model):
         self.ensure_one()
         return CLOVER_ENV[self.environment]['api_base']
 
+    def _get_oauth_base(self):
+        self.ensure_one()
+        return CLOVER_ENV[self.environment]['oauth_base']
+
     def _get_headers(self):
+        """Headers for Clover REST API v3 (merchant/device management)."""
         self.ensure_one()
         return {
             'Authorization': f'Bearer {self.api_token}',
@@ -128,21 +170,43 @@ class CloverTerminal(models.Model):
             'Accept': 'application/json',
         }
 
+    def _get_connect_headers(self, idempotency_key=None):
+        """Headers for Connect v1 REST Pay Display API (device control)."""
+        self.ensure_one()
+        if not self.clover_device_id:
+            raise UserError(_('Device ID not resolved yet. Run Test Connection first.'))
+        headers = {
+            'Authorization': f'Bearer {self.api_token}',
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-Clover-Device-Id': self.clover_device_id,
+            'X-POS-Id': self.raid,
+        }
+        if idempotency_key:
+            headers['Idempotency-Key'] = idempotency_key
+        return headers
+
     # ------------------------------------------------------------------
     # Core API caller  (all Clover HTTP traffic goes through here)
     # ------------------------------------------------------------------
 
-    def _api_request(self, method, endpoint, payload=None, timeout=30):
+    def _api_request(self, method, endpoint, payload=None, timeout=30,
+                     connect=False, idempotency_key=None):
         """
         Authenticated request to Clover API.
         Every call is written to clover.transaction.log for auditing.
 
+        :param connect: if True, use Connect v1 headers (X-Clover-Device-Id,
+                        X-POS-Id) instead of plain v3 headers.
+        :param idempotency_key: optional idempotency key for financial ops.
         Returns parsed JSON on success.
         Raises UserError on any failure.
         """
         self.ensure_one()
         url = f'{self._get_api_base()}{endpoint}'
         request_id = uuid.uuid4().hex[:16]
+        headers = (self._get_connect_headers(idempotency_key)
+                   if connect else self._get_headers())
 
         log_vals = {
             'terminal_id': self.id,
@@ -157,7 +221,7 @@ class CloverTerminal(models.Model):
             resp = requests.request(
                 method=method,
                 url=url,
-                headers=self._get_headers(),
+                headers=headers,
                 json=payload,
                 timeout=timeout,
             )
@@ -199,6 +263,40 @@ class CloverTerminal(models.Model):
             raise UserError(_('Clover error: %s', exc))
 
     # ------------------------------------------------------------------
+    # OAuth authorization
+    # ------------------------------------------------------------------
+
+    def action_authorize(self):
+        """Open Clover OAuth page in a new browser tab.
+
+        After merchant approval Clover redirects back to
+        ``/odoo/clover/oauth/callback`` where the code is exchanged
+        for an access token.
+        """
+        self.ensure_one()
+        if not self.app_id or not self.app_secret:
+            raise UserError(_('Fill in App ID and App Secret first.'))
+        if not self.merchant_id:
+            raise UserError(_('Fill in Merchant ID first.'))
+
+        base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url')
+        callback = f'{base_url}/odoo/clover/oauth/callback'
+        oauth_base = self._get_oauth_base()
+        # Latin America uses v1 OAuth (/oauth/authorize)
+        authorize_url = (
+            f'{oauth_base}/oauth/authorize'
+            f'?client_id={self.app_id}'
+            f'&merchant_id={self.merchant_id}'
+            f'&redirect_uri={callback}'
+            f'&response_type=code'
+        )
+        return {
+            'type': 'ir.actions.act_url',
+            'url': authorize_url,
+            'target': 'new',
+        }
+
+    # ------------------------------------------------------------------
     # Connection testing  (Phase 1 deliverable)
     # ------------------------------------------------------------------
 
@@ -217,10 +315,12 @@ class CloverTerminal(models.Model):
         ))
 
     def action_test_connection(self):
-        """Fetch merchant info + resolve device by serial number."""
+        """Fetch merchant info, resolve device, and ping via Connect v1."""
         self.ensure_one()
+        if not self.api_token:
+            raise UserError(_('No API token. Click Authorize first.'))
         try:
-            # 1) Verify merchant
+            # 1) Verify merchant via REST v3
             merchant = self._api_request(
                 'GET', f'/v3/merchants/{self.merchant_id}',
             )
@@ -232,12 +332,18 @@ class CloverTerminal(models.Model):
             device_model = device.get('productName', device.get('model', ''))
 
             self.write({
-                'state': 'testing',
-                'last_ping': fields.Datetime.now(),
                 'last_error': False,
                 'merchant_name': merchant_name,
                 'clover_device_id': clover_device_id,
                 'device_model': device_model,
+            })
+
+            # 3) Ping device via Connect v1 to validate full connectivity
+            self.ping_device_connect()
+
+            self.write({
+                'state': 'testing',
+                'last_ping': fields.Datetime.now(),
             })
             return {
                 'type': 'ir.actions.client',
@@ -245,7 +351,7 @@ class CloverTerminal(models.Model):
                 'params': {
                     'title': _('Connection OK'),
                     'message': _(
-                        'Merchant: %(merchant)s — Device: %(serial)s (%(model)s)',
+                        'Merchant: %(merchant)s — Device: %(serial)s (%(model)s) — Ping OK',
                         merchant=merchant_name,
                         serial=self.device_serial,
                         model=device_model or 'Flex',
@@ -278,21 +384,36 @@ class CloverTerminal(models.Model):
         self.write({'state': 'draft', 'last_error': False})
 
     # ------------------------------------------------------------------
-    # Device status check  (can be called from frontend later)
+    # Connect v1 device operations
     # ------------------------------------------------------------------
 
-    def check_device_online(self):
-        """Return True/False whether device responds."""
+    def ping_device_connect(self):
+        """Ping device via Connect v1 REST Pay Display API."""
         self.ensure_one()
-        if not self.clover_device_id:
+        if not self.api_token:
+            raise UserError(_('No API token. Run Authorize first.'))
+        result = self._api_request(
+            'POST', '/connect/v1/device/ping',
+            connect=True, timeout=15,
+        )
+        self.last_ping = fields.Datetime.now()
+        return result
+
+    def reset_device(self):
+        """Reset device to idle via Connect v1."""
+        self.ensure_one()
+        return self._api_request(
+            'PUT', '/connect/v1/device/reset',
+            connect=True, timeout=15,
+        )
+
+    def check_device_online(self):
+        """Return True/False whether device responds via Connect v1 ping."""
+        self.ensure_one()
+        if not self.clover_device_id or not self.api_token:
             return False
         try:
-            self._api_request(
-                'GET',
-                f'/v3/merchants/{self.merchant_id}/devices/{self.clover_device_id}',
-                timeout=10,
-            )
-            self.last_ping = fields.Datetime.now()
+            self.ping_device_connect()
             return True
         except UserError:
             return False
