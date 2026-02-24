@@ -106,9 +106,8 @@ class CloverTerminal(models.Model):
     )
     api_token = fields.Char(
         string='API Access Token',
-        readonly=True,
         groups='point_of_sale.group_pos_manager',
-        help='OAuth access token — acquired automatically via Authorize flow',
+        help='OAuth access token — acquired via Authorize flow or pasted from Merchant Dashboard (Setup → API Tokens)',
     )
     token_acquired = fields.Boolean(
         string='Token Acquired',
@@ -282,7 +281,6 @@ class CloverTerminal(models.Model):
         base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url')
         callback = f'{base_url}/odoo/clover/oauth/callback'
         oauth_base = self._get_oauth_base()
-        # Latin America uses v1 OAuth (/oauth/authorize)
         authorize_url = (
             f'{oauth_base}/oauth/authorize'
             f'?client_id={self.app_id}'
@@ -293,6 +291,22 @@ class CloverTerminal(models.Model):
         return {
             'type': 'ir.actions.act_url',
             'url': authorize_url,
+            'target': 'new',
+        }
+
+    def action_open_merchant_tokens(self):
+        """Open Clover Merchant Dashboard → API Tokens page.
+
+        The merchant can copy the token for this app and paste it
+        into the API Access Token field.
+        """
+        self.ensure_one()
+        web_base = CLOVER_ENV[self.environment]['web_base']
+        # Merchant Dashboard Setup page where API tokens are visible
+        url = f'{web_base}/setup/api-tokens?mid={self.merchant_id}'
+        return {
+            'type': 'ir.actions.act_url',
+            'url': url,
             'target': 'new',
         }
 

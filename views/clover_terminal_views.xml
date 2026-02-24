@@ -16,11 +16,17 @@
                             class="btn-warning"
                             invisible="token_acquired or state == 'active'"
                             help="Open Clover OAuth page to acquire API token"/>
+                    <button name="action_open_merchant_tokens"
+                            type="object"
+                            string="Get Token"
+                            class="btn-secondary"
+                            invisible="token_acquired or state == 'active'"
+                            help="Open Merchant Dashboard to copy API token manually"/>
                     <button name="action_test_connection"
                             type="object"
                             string="Test Connection"
                             class="btn-primary"
-                            invisible="not token_acquired or state == 'active'"/>
+                            invisible="state == 'active'"/>
                     <button name="action_activate"
                             type="object"
                             string="Activate"
