@@ -295,15 +295,23 @@ class CloverTerminal(models.Model):
         }
 
     def action_open_merchant_tokens(self):
-        """Open Clover Merchant Dashboard → API Tokens page.
+        """Open Clover Developer Dashboard → App Installs page.
 
-        The merchant can copy the token for this app and paste it
-        into the API Access Token field.
+        From there click on the merchant to see the API token.
         """
         self.ensure_one()
-        web_base = CLOVER_ENV[self.environment]['web_base']
-        # Merchant Dashboard Setup page where API tokens are visible
-        url = f'{web_base}/setup/api-tokens?mid={self.merchant_id}'
+        if not self.raid:
+            raise UserError(_('Fill in the RAID field first.'))
+        # RAID format: {developer_id}.{app_id}
+        parts = self.raid.split('.', 1)
+        if len(parts) != 2:
+            raise UserError(_('RAID must be in format: developer_id.app_id'))
+        developer_id = parts[0]
+        oauth_base = self._get_oauth_base()
+        url = (
+            f'{oauth_base}/developer-home/{developer_id}'
+            f'/apps/{self.app_id}/installs'
+        )
         return {
             'type': 'ir.actions.act_url',
             'url': url,
