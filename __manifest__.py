@@ -40,6 +40,7 @@ Technical Details:
         'security/ir.model.access.csv',
         'views/clover_terminal_views.xml',
         'views/clover_transaction_log_views.xml',
+        'views/pos_payment_method_views.xml',
         'views/menu.xml',
     ],
     'assets': {

@@ -135,6 +135,15 @@ class CloverTerminal(models.Model):
     merchant_name = fields.Char(string='Merchant Name', readonly=True)
     device_model = fields.Char(string='Device Model', readonly=True)
 
+    # Reverse relation to payment methods
+    payment_method_ids = fields.One2many(
+        'pos.payment.method', 'clover_terminal_id',
+        string='Payment Methods',
+    )
+    payment_method_count = fields.Integer(
+        compute='_compute_payment_method_count',
+    )
+
     _sql_constraints = [
         ('unique_device', 'unique(merchant_id, device_serial, company_id)',
          'This device is already registered for this merchant.'),
@@ -148,6 +157,10 @@ class CloverTerminal(models.Model):
     def _compute_token_acquired(self):
         for rec in self:
             rec.token_acquired = bool(rec.api_token)
+
+    def _compute_payment_method_count(self):
+        for rec in self:
+            rec.payment_method_count = len(rec.payment_method_ids)
 
     # ------------------------------------------------------------------
     # URL / header helpers
@@ -314,7 +327,7 @@ class CloverTerminal(models.Model):
         ))
 
     def action_test_connection(self):
-        """Fetch merchant info, resolve device, and ping via Connect v1."""
+        """Fetch merchant info, resolve device, and optionally ping via Connect v1."""
         self.ensure_one()
         if not self.api_token:
             raise UserError(_('No API token. Click Authorize first.'))
@@ -331,44 +344,95 @@ class CloverTerminal(models.Model):
             device_model = device.get('productName', device.get('model', ''))
 
             self.write({
-                'last_error': False,
                 'merchant_name': merchant_name,
                 'clover_device_id': clover_device_id,
                 'device_model': device_model,
             })
 
-            # 3) Ping device via Connect v1 to validate full connectivity
-            self.ping_device_connect()
+            # 3) Ping device via Connect v1 (non-fatal — device may be offline)
+            ping_ok = False
+            ping_error = ''
+            try:
+                self.ping_device_connect()
+                ping_ok = True
+            except UserError as ping_exc:
+                ping_error = str(ping_exc)
+                _logger.warning(
+                    'Clover terminal %s: API OK but device ping failed: %s',
+                    self.name, ping_error,
+                )
 
-            self.write({
+            # Steps 1-2 passed → terminal is valid regardless of ping
+            write_vals = {
                 'state': 'testing',
-                'last_ping': fields.Datetime.now(),
-            })
-            return {
-                'type': 'ir.actions.client',
-                'tag': 'display_notification',
-                'params': {
-                    'title': _('Connection OK'),
-                    'message': _(
-                        'Merchant: %(merchant)s — Device: %(serial)s (%(model)s) — Ping OK',
-                        merchant=merchant_name,
-                        serial=self.device_serial,
-                        model=device_model or 'Flex',
-                    ),
-                    'type': 'success',
-                    'sticky': False,
-                    'next': {
-                        'type': 'ir.actions.act_window',
-                        'res_model': 'clover.terminal',
-                        'res_id': self.id,
-                        'views': [(False, 'form')],
-                        'target': 'current',
-                    },
-                },
+                'last_error': ping_error if not ping_ok else False,
             }
+            if ping_ok:
+                write_vals['last_ping'] = fields.Datetime.now()
+            self.write(write_vals)
+
+            if ping_ok:
+                return {
+                    'type': 'ir.actions.client',
+                    'tag': 'display_notification',
+                    'params': {
+                        'title': _('Connection OK'),
+                        'message': _(
+                            'Merchant: %(merchant)s — Device: %(serial)s (%(model)s) — Ping OK',
+                            merchant=merchant_name,
+                            serial=self.device_serial,
+                            model=device_model or 'Flex',
+                        ),
+                        'type': 'success',
+                        'sticky': False,
+                        'next': {
+                            'type': 'ir.actions.act_window',
+                            'res_model': 'clover.terminal',
+                            'res_id': self.id,
+                            'views': [(False, 'form')],
+                            'target': 'current',
+                        },
+                    },
+                }
+            else:
+                return {
+                    'type': 'ir.actions.client',
+                    'tag': 'display_notification',
+                    'params': {
+                        'title': _('API OK — Device Offline'),
+                        'message': _(
+                            'Merchant: %(merchant)s — Device: %(serial)s (%(model)s) verified. '
+                            'Device ping failed — start Cloud Pay Display on the terminal.',
+                            merchant=merchant_name,
+                            serial=self.device_serial,
+                            model=device_model or 'Flex',
+                        ),
+                        'type': 'warning',
+                        'sticky': True,
+                        'next': {
+                            'type': 'ir.actions.act_window',
+                            'res_model': 'clover.terminal',
+                            'res_id': self.id,
+                            'views': [(False, 'form')],
+                            'target': 'current',
+                        },
+                    },
+                }
+
         except UserError as exc:
             self.write({'state': 'error', 'last_error': str(exc)})
             raise
+
+    def action_view_payment_methods(self):
+        """Open the list of payment methods linked to this terminal."""
+        self.ensure_one()
+        return {
+            'type': 'ir.actions.act_window',
+            'name': _('Payment Methods'),
+            'res_model': 'pos.payment.method',
+            'view_mode': 'list,form',
+            'domain': [('clover_terminal_id', '=', self.id)],
+        }
 
     def action_activate(self):
         """Mark terminal ready for production use."""
