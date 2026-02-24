@@ -102,12 +102,13 @@ class CloverTerminal(models.Model):
         string='RAID',
         required=True,
         tracking=True,
-        help='Remote Application ID from App Settings (e.g. 4YFRTCTS6SMFT.R9126BVSNOJYY)',
+        help='Remote Application ID from App Settings (e.g. 4YFRTCTS6SMFT.R9126BVSN0JYY)',
     )
     api_token = fields.Char(
         string='API Access Token',
+        readonly=True,
         groups='point_of_sale.group_pos_manager',
-        help='OAuth access token — acquired via Authorize flow or pasted from Merchant Dashboard (Setup → API Tokens)',
+        help='OAuth access token — acquired automatically via Authorize flow',
     )
     token_acquired = fields.Boolean(
         string='Token Acquired',
@@ -172,13 +173,13 @@ class CloverTerminal(models.Model):
     def _get_connect_headers(self, idempotency_key=None):
         """Headers for Connect v1 REST Pay Display API (device control)."""
         self.ensure_one()
-        if not self.clover_device_id:
-            raise UserError(_('Device ID not resolved yet. Run Test Connection first.'))
+        if not self.device_serial:
+            raise UserError(_('Device serial not set.'))
         headers = {
             'Authorization': f'Bearer {self.api_token}',
             'Content-Type': 'application/json',
             'Accept': 'application/json',
-            'X-Clover-Device-Id': self.clover_device_id,
+            'X-Clover-Device-Id': self.device_serial,
             'X-POS-Id': self.raid,
         }
         if idempotency_key:
@@ -291,30 +292,6 @@ class CloverTerminal(models.Model):
         return {
             'type': 'ir.actions.act_url',
             'url': authorize_url,
-            'target': 'new',
-        }
-
-    def action_open_merchant_tokens(self):
-        """Open Clover Developer Dashboard → App Installs page.
-
-        From there click on the merchant to see the API token.
-        """
-        self.ensure_one()
-        if not self.raid:
-            raise UserError(_('Fill in the RAID field first.'))
-        # RAID format: {developer_id}.{app_id}
-        parts = self.raid.split('.', 1)
-        if len(parts) != 2:
-            raise UserError(_('RAID must be in format: developer_id.app_id'))
-        developer_id = parts[0]
-        oauth_base = self._get_oauth_base()
-        url = (
-            f'{oauth_base}/developer-home/{developer_id}'
-            f'/apps/{self.app_id}/installs'
-        )
-        return {
-            'type': 'ir.actions.act_url',
-            'url': url,
             'target': 'new',
         }
 
@@ -432,7 +409,7 @@ class CloverTerminal(models.Model):
     def check_device_online(self):
         """Return True/False whether device responds via Connect v1 ping."""
         self.ensure_one()
-        if not self.clover_device_id or not self.api_token:
+        if not self.device_serial or not self.api_token:
             return False
         try:
             self.ping_device_connect()

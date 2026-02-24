@@ -39,15 +39,16 @@ class CloverOAuthController(http.Controller):
             )
 
         # Exchange authorization code for access token
+        # Clover v1 OAuth uses GET with query params
         oauth_base = terminal._get_oauth_base()
         token_url = f'{oauth_base}/oauth/token'
 
         try:
-            resp = requests.post(token_url, params={
+            resp = requests.get(token_url, params={
                 'client_id': terminal.app_id,
                 'client_secret': terminal.app_secret,
                 'code': code,
-            }, timeout=30)
+            }, timeout=30, allow_redirects=True)
 
             if resp.status_code != 200:
                 _logger.error(
@@ -81,7 +82,7 @@ class CloverOAuthController(http.Controller):
                 'terminal_id': terminal.id,
                 'request_id': 'oauth-token-exchange',
                 'endpoint': '/oauth/token',
-                'http_method': 'POST',
+                'http_method': 'GET',
                 'http_status': 200,
                 'request_payload': json.dumps({
                     'client_id': terminal.app_id,
@@ -97,10 +98,9 @@ class CloverOAuthController(http.Controller):
                 '/odoo/clover/oauth/error?msg=' + str(exc)[:200]
             )
 
-        # Redirect back to the terminal form
+        # Redirect back to the terminal form view
         return request.redirect(
-            f'/odoo/action-clover_terminal_integration.action_clover_terminal'
-            f'?id={terminal.id}&view_type=form'
+            f'/web#id={terminal.id}&model=clover.terminal&view_type=form'
         )
 
     @http.route('/odoo/clover/oauth/error', type='http', auth='user',

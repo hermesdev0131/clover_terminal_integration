@@ -16,12 +16,6 @@
                             class="btn-warning"
                             invisible="token_acquired or state == 'active'"
                             help="Open Clover OAuth page to acquire API token"/>
-                    <button name="action_open_merchant_tokens"
-                            type="object"
-                            string="Get Token"
-                            class="btn-secondary"
-                            invisible="token_acquired or state == 'active'"
-                            help="Open Merchant Dashboard to copy API token manually"/>
                     <button name="action_test_connection"
                             type="object"
                             string="Test Connection"
@@ -56,9 +50,9 @@
                             <field name="device_serial"
                                    placeholder="e.g. C046LT52640523"/>
                             <field name="app_id"
-                                   placeholder="e.g. R9126BVSNOJYY"/>
+                                   placeholder="e.g. R9126BVSN0JYY"/>
                             <field name="raid"
-                                   placeholder="e.g. 4YFRTCTS6SMFT.R9126BVSNOJYY"/>
+                                   placeholder="e.g. 4YFRTCTS6SMFT.R9126BVSN0JYY"/>
                         </group>
                         <group string="Authentication">
                             <field name="app_secret" password="True"/>
