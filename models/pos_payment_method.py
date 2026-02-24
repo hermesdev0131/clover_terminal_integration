@@ -1,4 +1,4 @@
-from odoo import api, fields, models, _
+from odoo import fields, models, _
 from odoo.exceptions import UserError
 
 
@@ -9,7 +9,6 @@ class PosPaymentMethod(models.Model):
     # Terminal selection
     # ------------------------------------------------------------------
 
-    @api.model
     def _get_payment_terminal_selection(self):
         return super()._get_payment_terminal_selection() + [('clover', 'Clover')]
 
