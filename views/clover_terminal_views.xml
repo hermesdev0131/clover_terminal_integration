@@ -82,7 +82,6 @@
                             <field name="last_ping"/>
                             <field name="company_id"
                                    groups="base.group_multi_company"/>
-                            <field name="active"/>
                         </group>
                         <group string="Diagnostics"
                                invisible="not last_error">
