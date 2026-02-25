@@ -7,6 +7,11 @@
         <field name="model">pos.payment.method</field>
         <field name="inherit_id" ref="point_of_sale.pos_payment_method_view_form"/>
         <field name="arch" type="xml">
+            <!-- Force 'Integrate with' dropdown visible when Terminal is selected -->
+            <xpath expr="//field[@name='use_payment_terminal']" position="attributes">
+                <attribute name="invisible">payment_method_type != 'terminal'</attribute>
+            </xpath>
+            <!-- Add Clover terminal selector after the dropdown -->
             <xpath expr="//field[@name='use_payment_terminal']" position="after">
                 <field name="clover_terminal_id"
                        invisible="use_payment_terminal != 'clover'"
