@@ -25,11 +25,16 @@
                             type="object"
                             string="Activate"
                             class="btn-success"
-                            invisible="state not in ('testing', 'error')"/>
+                            invisible="state not in ('testing', 'error', 'inactive')"/>
+                    <button name="action_deactivate"
+                            type="object"
+                            string="Deactivate"
+                            invisible="state != 'active'"
+                            confirm="Deactivate this terminal?"/>
                     <button name="action_reset_draft"
                             type="object"
                             string="Reset"
-                            invisible="state == 'draft'"/>
+                            invisible="state in ('draft', 'inactive')"/>
                     <field name="state" widget="statusbar"
                            statusbar_visible="draft,testing,active"/>
                 </header>

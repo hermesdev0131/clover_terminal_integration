@@ -120,11 +120,11 @@ class CloverTerminal(models.Model):
         required=True,
         default=lambda self: self.env.company,
     )
-    active = fields.Boolean(default=True)
     state = fields.Selection(
         [('draft', 'Not Configured'),
          ('testing', 'Testing'),
          ('active', 'Active'),
+         ('inactive', 'Inactive'),
          ('error', 'Error')],
         string='Status',
         default='draft',
@@ -148,6 +148,12 @@ class CloverTerminal(models.Model):
         ('unique_device', 'unique(merchant_id, device_serial, company_id)',
          'This device is already registered for this merchant.'),
     ]
+
+    def init(self):
+        """Clean up partial index from previous version if it exists."""
+        self.env.cr.execute("""
+            DROP INDEX IF EXISTS clover_terminal_unique_active_device;
+        """)
 
     # ------------------------------------------------------------------
     # Computed fields
@@ -437,9 +443,14 @@ class CloverTerminal(models.Model):
     def action_activate(self):
         """Mark terminal ready for production use."""
         self.ensure_one()
-        if self.state not in ('testing', 'error'):
+        if self.state not in ('testing', 'error', 'inactive'):
             raise UserError(_('Test the connection first.'))
         self.write({'state': 'active', 'last_error': False})
+
+    def action_deactivate(self):
+        """Deactivate terminal — keeps record visible but unusable."""
+        self.ensure_one()
+        self.write({'state': 'inactive'})
 
     def action_reset_draft(self):
         """Reset terminal back to draft."""
