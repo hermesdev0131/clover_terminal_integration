@@ -14,11 +14,18 @@
               action="action_clover_terminal"
               sequence="10"/>
 
-    <!-- Transaction Logs -->
+    <!-- Payment Transactions -->
+    <menuitem id="menu_clover_transactions"
+              name="Transactions"
+              parent="menu_clover_root"
+              action="action_clover_transaction"
+              sequence="20"/>
+
+    <!-- API Audit Logs -->
     <menuitem id="menu_clover_logs"
-              name="Transaction Logs"
+              name="API Logs"
               parent="menu_clover_root"
               action="action_clover_transaction_log"
-              sequence="20"/>
+              sequence="30"/>
 
 </odoo>

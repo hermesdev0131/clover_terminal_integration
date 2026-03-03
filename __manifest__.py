@@ -40,12 +40,15 @@ Technical Details:
         'security/ir.model.access.csv',
         'views/clover_terminal_views.xml',
         'views/clover_transaction_log_views.xml',
+        'views/clover_transaction_views.xml',
         'views/pos_payment_method_views.xml',
         'views/menu.xml',
     ],
     'assets': {
         'point_of_sale._assets_pos': [
-            # Phase 2: payment interfaces and QR popup will be added here
+            'clover_terminal_integration/static/src/xml/clover_qr_screen.xml',
+            'clover_terminal_integration/static/src/js/clover_qr_screen.js',
+            'clover_terminal_integration/static/src/js/clover_payment_interface.js',
         ],
     },
     'installable': True,

@@ -491,3 +491,110 @@ class CloverTerminal(models.Model):
             return True
         except UserError:
             return False
+
+    # ------------------------------------------------------------------
+    # Payment API  (Phase 3 — Cloud Pay Display)
+    # ------------------------------------------------------------------
+
+    def _payment_create_clover_order(self, amount_cents, order_uid):
+        """Create a Clover order for the payment. Returns clover_order_id (str)."""
+        self.ensure_one()
+        result = self._api_request(
+            'POST',
+            f'/v3/merchants/{self.merchant_id}/orders',
+            payload={'currency': 'USD', 'state': 'open'},
+        )
+        clover_order_id = result.get('id')
+        if not clover_order_id:
+            raise UserError(_('Clover did not return an order ID.'))
+        # Attach a line item so the order has a description on the device
+        self._api_request(
+            'POST',
+            f'/v3/merchants/{self.merchant_id}/orders/{clover_order_id}/line_items',
+            payload={
+                'name': f'POS {order_uid}',
+                'price': amount_cents,
+                'unitQty': 1,
+            },
+        )
+        return clover_order_id
+
+    def _payment_send_card(self, clover_order_id, amount_cents, idempotency_key):
+        """Send a SALE request to the terminal via Connect v1.
+
+        Returns the Clover payment ID string (used to poll status).
+        """
+        self.ensure_one()
+        result = self._api_request(
+            'POST',
+            '/connect/v1/payments',
+            payload={
+                'amount': amount_cents,
+                'externalPaymentId': idempotency_key,
+                'cardEntryMethods': CARD_ENTRY_ALL,
+                'orderId': clover_order_id,
+            },
+            connect=True,
+            idempotency_key=idempotency_key,
+            timeout=15,
+        )
+        return result.get('paymentId') or result.get('id') or ''
+
+    def _payment_send_qr(self, clover_order_id, amount_cents, idempotency_key):
+        """Send a QR-only payment request to the terminal via Connect v1.
+
+        The terminal displays the QR; the customer scans it independently.
+        Returns (clover_payment_id, qr_payload) where qr_payload is the
+        QR code URL / data returned by Clover.
+        """
+        self.ensure_one()
+        result = self._api_request(
+            'POST',
+            '/connect/v1/payments',
+            payload={
+                'amount': amount_cents,
+                'externalPaymentId': idempotency_key,
+                'orderId': clover_order_id,
+                'presentQrcOnly': True,
+            },
+            connect=True,
+            idempotency_key=idempotency_key,
+            timeout=15,
+        )
+        clover_payment_id = result.get('paymentId') or result.get('id') or ''
+        # Clover returns the QR code under various key names depending on version
+        qr_payload = (
+            result.get('qrPaymentCode')
+            or result.get('qrCode')
+            or result.get('qr')
+            or ''
+        )
+        return clover_payment_id, qr_payload
+
+    def _payment_get_status(self, clover_payment_id):
+        """Fetch a specific payment from Clover REST v3. Returns raw dict."""
+        self.ensure_one()
+        return self._api_request(
+            'GET',
+            f'/v3/merchants/{self.merchant_id}/payments/{clover_payment_id}',
+        )
+
+    def _payment_get_order_payments(self, clover_order_id):
+        """List payments attached to a Clover order (used for async QR polling)."""
+        self.ensure_one()
+        result = self._api_request(
+            'GET',
+            f'/v3/merchants/{self.merchant_id}/orders/{clover_order_id}/payments',
+        )
+        return result.get('elements', [])
+
+    def _payment_cancel_on_terminal(self):
+        """Reset the terminal to dismiss any in-progress payment screen.
+
+        Best-effort — terminal may already be idle.
+        """
+        self.ensure_one()
+        try:
+            self._api_request('PUT', '/connect/v1/device/reset', connect=True, timeout=15)
+        except UserError:
+            pass

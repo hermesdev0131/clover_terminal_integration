@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Form View -->
+    <record id="clover_transaction_view_form" model="ir.ui.view">
+        <field name="name">clover.transaction.form</field>
+        <field name="model">clover.transaction</field>
+        <field name="arch" type="xml">
+            <form create="false" edit="false">
+                <header>
+                    <field name="state" widget="statusbar"
+                           statusbar_visible="created,pending,approved,rejected,canceled"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group string="Transaction">
+                            <field name="terminal_id"/>
+                            <field name="payment_method_id"/>
+                            <field name="payment_type"/>
+                            <field name="amount_display" string="Amount"/>
+                            <field name="idempotency_key"/>
+                            <field name="attempt_number"/>
+                            <field name="create_date" string="Created"/>
+                        </group>
+                        <group string="References">
+                            <field name="pos_order_uid"/>
+                            <field name="pos_order_id"/>
+                            <field name="clover_order_id"/>
+                            <field name="clover_payment_id"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="QR Payload" invisible="not qr_payload">
+                            <field name="qr_payload" nolabel="1"/>
+                        </page>
+                        <page string="Raw Response" invisible="not raw_response_payload">
+                            <field name="raw_response_payload" nolabel="1"/>
+                        </page>
+                        <page string="Error" invisible="not error_message">
+                            <field name="error_message" nolabel="1"/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- List View -->
+    <record id="clover_transaction_view_tree" model="ir.ui.view">
+        <field name="name">clover.transaction.list</field>
+        <field name="model">clover.transaction</field>
+        <field name="arch" type="xml">
+            <list create="false" edit="false" default_order="create_date desc">
+                <field name="create_date" string="Time"/>
+                <field name="terminal_id"/>
+                <field name="payment_type"/>
+                <field name="amount_display" string="Amount"/>
+                <field name="pos_order_uid" string="POS Order"/>
+                <field name="clover_payment_id" optional="show"/>
+                <field name="attempt_number" optional="hide"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'approved'"
+                       decoration-danger="state in ('rejected', 'error', 'expired')"
+                       decoration-warning="state in ('created', 'pending')"
+                       decoration-muted="state == 'canceled'"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Search View -->
+    <record id="clover_transaction_view_search" model="ir.ui.view">
+        <field name="name">clover.transaction.search</field>
+        <field name="model">clover.transaction</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="pos_order_uid" string="POS Order"/>
+                <field name="clover_payment_id"/>
+                <field name="terminal_id"/>
+                <filter string="Approved" name="approved" domain="[('state','=','approved')]"/>
+                <filter string="Failures" name="failures"
+                        domain="[('state','in',('rejected','error','expired'))]"/>
+                <filter string="Today" name="today"
+                        domain="[('create_date','&gt;=',datetime.datetime.combine(datetime.date.today(),datetime.time(0,0,0)))]"/>
+                <group expand="0" string="Group By">
+                    <filter string="State"    name="group_state"    context="{'group_by': 'state'}"/>
+                    <filter string="Type"     name="group_type"     context="{'group_by': 'payment_type'}"/>
+                    <filter string="Terminal" name="group_terminal" context="{'group_by': 'terminal_id'}"/>
+                    <filter string="Date"     name="group_date"     context="{'group_by': 'create_date:day'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- Action -->
+    <record id="action_clover_transaction" model="ir.actions.act_window">
+        <field name="name">Payment Transactions</field>
+        <field name="res_model">clover.transaction</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{'search_default_today': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No payment transactions yet.
+            </p>
+            <p>
+                Transactions are created automatically when a cashier
+                initiates a Clover card or QR payment in the POS.
+            </p>
+        </field>
+    </record>
+
+</odoo>
