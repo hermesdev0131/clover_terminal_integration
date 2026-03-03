@@ -1,5 +1,17 @@
-from odoo import fields, models, _
+import json
+
+from odoo import api, fields, models, _
 from odoo.exceptions import UserError
+
+# Clover payment `result` field → our transaction state
+_CLOVER_RESULT_MAP = {
+    'SUCCESS': 'approved',
+    'AUTH': 'approved',
+    'OFFLINE_SUCCESS': 'approved',
+    'FAIL': 'rejected',
+    'VOIDED': 'canceled',
+    'TIMEDOUT': 'expired',
+}
 
 
 class PosPaymentMethod(models.Model):
@@ -19,8 +31,25 @@ class PosPaymentMethod(models.Model):
         help='Select the Clover terminal device to use for payments.',
     )
 
+    clover_payment_type = fields.Selection(
+        [('card', 'Card Payment'), ('qr', 'QR Payment')],
+        string='Clover Payment Type',
+        default='card',
+        help='Whether this method triggers a card or QR payment on the terminal.',
+    )
+
     # ------------------------------------------------------------------
-    # Helpers
+    # POS data loading — expose custom fields to the frontend
+    # ------------------------------------------------------------------
+
+    @api.model
+    def _load_pos_data_fields(self, config_id):
+        fields = super()._load_pos_data_fields(config_id)
+        fields += ['clover_terminal_id', 'clover_payment_type']
+        return fields
+
+    # ------------------------------------------------------------------
+    # Internal helper
     # ------------------------------------------------------------------
 
     def _get_clover_terminal(self):
@@ -31,3 +60,128 @@ class PosPaymentMethod(models.Model):
         if not self.clover_terminal_id:
             raise UserError(_('No Clover terminal selected on this payment method.'))
         return self.clover_terminal_id
+
+    # ------------------------------------------------------------------
+    # RPC endpoints called from POS JS
+    # ------------------------------------------------------------------
+
+    def clover_create_payment(self, amount_cents, order_uid, payment_type):
+        """Initiate a payment on the Clover terminal.
+
+        Called from CloverPaymentInterface in the POS JS.
+        Returns ``{'clover_transaction_id': <int>, 'qr_payload': <str>}``
+        or ``{'error': <msg>}`` on failure.
+        """
+        self.ensure_one()
+        terminal = self._get_clover_terminal()
+        Transaction = self.env['clover.transaction'].sudo()
+
+        # Guard: one approved payment per order per payment method
+        if Transaction.search_count([
+            ('pos_order_uid', '=', order_uid),
+            ('payment_method_id', '=', self.id),
+            ('state', '=', 'approved'),
+        ]):
+            return {'error': _('This order already has an approved payment.')}
+
+        # Determine attempt number
+        last = Transaction.search(
+            [('pos_order_uid', '=', order_uid), ('payment_method_id', '=', self.id)],
+            order='attempt_number desc', limit=1,
+        )
+        attempt = (last.attempt_number + 1) if last else 1
+        idempotency_key = f'{order_uid}_{attempt}_{payment_type}'
+
+        tx = Transaction.create({
+            'terminal_id': terminal.id,
+            'payment_method_id': self.id,
+            'company_id': self.env.company.id,
+            'amount': amount_cents,
+            'payment_type': payment_type,
+            'state': 'created',
+            'idempotency_key': idempotency_key,
+            'attempt_number': attempt,
+            'pos_order_uid': order_uid,
+        })
+
+        try:
+            clover_order_id = terminal._payment_create_clover_order(amount_cents, order_uid)
+            tx.write({'clover_order_id': clover_order_id, 'state': 'pending'})
+
+            qr_payload = ''
+            if payment_type == 'qr':
+                clover_payment_id, qr_payload = terminal._payment_send_qr(
+                    clover_order_id, amount_cents, idempotency_key,
+                )
+            else:
+                clover_payment_id = terminal._payment_send_card(
+                    clover_order_id, amount_cents, idempotency_key,
+                )
+
+            tx.write({'clover_payment_id': clover_payment_id, 'qr_payload': qr_payload})
+            return {'clover_transaction_id': tx.id, 'qr_payload': qr_payload}
+
+        except Exception as exc:
+            tx.write({'state': 'error', 'error_message': str(exc)})
+            return {'error': str(exc)}
+
+    def clover_get_payment_status(self, clover_transaction_id):
+        """Poll current status of an in-progress Clover payment.
+
+        Called by the polling loop in CloverPaymentInterface (card) and
+        CloverQRScreen (QR).  Returns ``{'state': <str>, 'clover_payment_id': <str>}``.
+        """
+        self.ensure_one()
+        tx = self.env['clover.transaction'].sudo().browse(clover_transaction_id)
+        if not tx.exists():
+            return {'state': 'error', 'clover_payment_id': ''}
+
+        # Already terminal — no need to query Clover again
+        if tx.state in ('approved', 'rejected', 'canceled', 'expired', 'error'):
+            return {'state': tx.state, 'clover_payment_id': tx.clover_payment_id or ''}
+
+        terminal = self._get_clover_terminal()
+        try:
+            new_state = 'pending'
+            resolved_payment_id = tx.clover_payment_id or ''
+
+            if tx.payment_type == 'qr' and not tx.clover_payment_id:
+                # QR async: poll the Clover order for any settled payment
+                if tx.clover_order_id:
+                    for pmt in terminal._payment_get_order_payments(tx.clover_order_id):
+                        mapped = _CLOVER_RESULT_MAP.get(pmt.get('result', ''), '')
+                        if mapped:
+                            new_state = mapped
+                            resolved_payment_id = pmt.get('id', '')
+                            tx.write({'raw_response_payload': json.dumps(pmt)})
+                            break
+            elif tx.clover_payment_id:
+                # Card (or QR with a payment ID): poll the specific payment
+                clover_pmt = terminal._payment_get_status(tx.clover_payment_id)
+                new_state = _CLOVER_RESULT_MAP.get(clover_pmt.get('result', ''), 'pending')
+                tx.write({'raw_response_payload': json.dumps(clover_pmt)})
+
+            if new_state != 'pending':
+                tx.write({'state': new_state, 'clover_payment_id': resolved_payment_id})
+
+            return {'state': new_state, 'clover_payment_id': resolved_payment_id}
+
+        except Exception:
+            # Don't surface polling errors — keep the JS retrying
+            return {'state': 'pending', 'clover_payment_id': tx.clover_payment_id or ''}
+
+    def clover_cancel_payment(self, clover_transaction_id):
+        """Cancel a pending Clover payment.
+
+        Called from CloverPaymentInterface.send_payment_cancel() or
+        CloverQRScreen cancel button.
+        """
+        self.ensure_one()
+        tx = self.env['clover.transaction'].sudo().browse(clover_transaction_id)
+        if not tx.exists() or tx.state in ('approved', 'canceled'):
+            return {'success': True}
+
+        terminal = self._get_clover_terminal()
+        terminal._payment_cancel_on_terminal()
+        tx.write({'state': 'canceled'})
+        return {'success': True}
