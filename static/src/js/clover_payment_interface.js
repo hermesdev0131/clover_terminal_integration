@@ -1,7 +1,7 @@
 /** @odoo-module */
 
 import { PaymentInterface } from "@point_of_sale/app/payment/payment_interface";
-import { registry } from "@web/core/registry";
+import { register_payment_method } from "@point_of_sale/app/store/pos_store";
 import { CloverQRScreen } from "./clover_qr_screen";
 
 const POLL_INTERVAL_MS = 3000;      // poll Clover status every 3 s
@@ -192,4 +192,4 @@ export class CloverPaymentInterface extends PaymentInterface {
     }
 }
 
-registry.category("pos_payment_methods").add("clover", CloverPaymentInterface);
+register_payment_method("clover", CloverPaymentInterface);
