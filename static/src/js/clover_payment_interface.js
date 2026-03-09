@@ -17,17 +17,17 @@ export class CloverPaymentInterface extends PaymentInterface {
     // Public PaymentInterface API
     // ------------------------------------------------------------------
 
-    async send_payment_request(cid) {
-        await super.send_payment_request(cid);
+    async send_payment_request(uuid) {
+        await super.send_payment_request(uuid);
 
         if (this._paymentType() === "qr") {
-            return this._sendQRPaymentRequest(cid);
+            return this._sendQRPaymentRequest(uuid);
         }
-        return this._sendCardPaymentRequest(cid);
+        return this._sendCardPaymentRequest(uuid);
     }
 
-    async send_payment_cancel(order, cid) {
-        const line = order.get_paymentline(cid);
+    async send_payment_cancel(order, uuid) {
+        const line = order.get_paymentline(uuid);
         if (line?.transaction_id) {
             try {
                 await this._rpc("clover_cancel_payment", {
@@ -37,16 +37,16 @@ export class CloverPaymentInterface extends PaymentInterface {
                 // best-effort — terminal may have already settled
             }
         }
-        return super.send_payment_cancel(order, cid);
+        return super.send_payment_cancel(order, uuid);
     }
 
     // ------------------------------------------------------------------
     // Card payment flow
     // ------------------------------------------------------------------
 
-    async _sendCardPaymentRequest(cid) {
+    async _sendCardPaymentRequest(uuid) {
         const order = this.pos.get_order();
-        const line = order.get_paymentline(cid);
+        const line = order.get_paymentline(uuid);
 
         line.set_payment_status("waiting");
 
@@ -79,9 +79,9 @@ export class CloverPaymentInterface extends PaymentInterface {
     // QR payment flow
     // ------------------------------------------------------------------
 
-    async _sendQRPaymentRequest(cid) {
+    async _sendQRPaymentRequest(uuid) {
         const order = this.pos.get_order();
-        const line = order.get_paymentline(cid);
+        const line = order.get_paymentline(uuid);
 
         line.set_payment_status("waiting");
 
@@ -110,7 +110,7 @@ export class CloverPaymentInterface extends PaymentInterface {
         const approved = await new Promise((resolve) => {
             this.env.services.dialog.add(CloverQRScreen, {
                 transactionId: result.clover_transaction_id,
-                paymentMethodId: this.payment_method.id,
+                paymentMethodId: this.payment_method_id.id,
                 qrPayload: result.qr_payload || "",
                 amount: line.amount,
                 orderRef: order.uid,
@@ -175,14 +175,14 @@ export class CloverPaymentInterface extends PaymentInterface {
     // ------------------------------------------------------------------
 
     _paymentType() {
-        return this.payment_method.clover_payment_type || "card";
+        return this.payment_method_id.clover_payment_type || "card";
     }
 
     _rpc(method, kwargs = {}) {
         return this.env.services.orm.call(
             "pos.payment.method",
             method,
-            [[this.payment_method.id]],
+            [[this.payment_method_id.id]],
             kwargs
         );
     }
