@@ -19,7 +19,10 @@
       "WebFetch(domain:github.com)",
       "Bash(locate PaymentInterface)",
       "Bash(pip3 show odoo)",
-      "Bash(pip show odoo)"
+      "Bash(pip show odoo)",
+      "Bash(git rebase HEAD~3 --exec 'git commit --amend --author=\"\"hermesdev <hermesdev0131@gmail.com>\"\" --no-edit')",
+      "Bash(git stash)",
+      "Bash(git stash pop)"
     ]
   }
 }

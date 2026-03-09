@@ -27,7 +27,7 @@ export class CloverPaymentInterface extends PaymentInterface {
     }
 
     async send_payment_cancel(order, uuid) {
-        const line = order.get_paymentline(uuid);
+        const line = order.get_paymentline_by_uuid(uuid);
         if (line?.transaction_id) {
             try {
                 await this._rpc("clover_cancel_payment", {
@@ -46,7 +46,7 @@ export class CloverPaymentInterface extends PaymentInterface {
 
     async _sendCardPaymentRequest(uuid) {
         const order = this.pos.get_order();
-        const line = order.get_paymentline(uuid);
+        const line = order.get_paymentline_by_uuid(uuid);
 
         line.set_payment_status("waiting");
 
@@ -81,7 +81,7 @@ export class CloverPaymentInterface extends PaymentInterface {
 
     async _sendQRPaymentRequest(uuid) {
         const order = this.pos.get_order();
-        const line = order.get_paymentline(uuid);
+        const line = order.get_paymentline_by_uuid(uuid);
 
         line.set_payment_status("waiting");
 
