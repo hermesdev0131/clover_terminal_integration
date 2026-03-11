@@ -2,6 +2,7 @@
 
 import { PaymentInterface } from "@point_of_sale/app/payment/payment_interface";
 import { register_payment_method } from "@point_of_sale/app/store/pos_store";
+import { _t } from "@web/core/l10n/translation";
 import { CloverQRScreen } from "./clover_qr_screen";
 
 const POLL_INTERVAL_MS = 3000;      // poll Clover status every 3 s
@@ -11,6 +12,8 @@ export class CloverPaymentInterface extends PaymentInterface {
 
     setup(...args) {
         super.setup(...args);
+        this._cancelled = false;
+        this.enable_reversals();
     }
 
     // ------------------------------------------------------------------
@@ -18,6 +21,7 @@ export class CloverPaymentInterface extends PaymentInterface {
     // ------------------------------------------------------------------
 
     async send_payment_request(uuid) {
+        this._cancelled = false;
         await super.send_payment_request(uuid);
 
         if (this._paymentType() === "qr") {
@@ -27,6 +31,7 @@ export class CloverPaymentInterface extends PaymentInterface {
     }
 
     async send_payment_cancel(order, uuid) {
+        this._cancelled = true;
         const line = order.get_paymentline_by_uuid(uuid);
         if (line?.transaction_id) {
             try {
@@ -38,6 +43,31 @@ export class CloverPaymentInterface extends PaymentInterface {
             }
         }
         return super.send_payment_cancel(order, uuid);
+    }
+
+    async send_payment_reversal(uuid) {
+        const order = this.pos.get_order();
+        const line = order.get_paymentline_by_uuid(uuid);
+        if (!line?.transaction_id) {
+            return false;
+        }
+        try {
+            const result = await this._rpc("clover_refund_payment", {
+                clover_payment_id: String(line.transaction_id),
+            });
+            if (result?.error) {
+                this._showError(result.error);
+                return false;
+            }
+            return true;
+        } catch (_e) {
+            this._showError(_t("Could not process refund. Check connection."));
+            return false;
+        }
+    }
+
+    close() {
+        this._cancelled = true;
     }
 
     // ------------------------------------------------------------------
@@ -60,11 +90,13 @@ export class CloverPaymentInterface extends PaymentInterface {
                 payment_type: "card",
             });
         } catch (_e) {
+            this._showError(_t("Could not reach Clover. Check device/network."));
             line.set_payment_status("retry");
             return false;
         }
 
         if (!result || result.error) {
+            this._showError(result?.error || _t("Clover payment failed."));
             line.set_payment_status("retry");
             return false;
         }
@@ -95,11 +127,13 @@ export class CloverPaymentInterface extends PaymentInterface {
                 payment_type: "qr",
             });
         } catch (_e) {
+            this._showError(_t("Could not reach Clover. Check device/network."));
             line.set_payment_status("retry");
             return false;
         }
 
         if (!result || result.error) {
+            this._showError(result?.error || _t("Clover QR payment failed."));
             line.set_payment_status("retry");
             return false;
         }
@@ -136,8 +170,8 @@ export class CloverPaymentInterface extends PaymentInterface {
         while (Date.now() < deadline) {
             await this._sleep(POLL_INTERVAL_MS);
 
-            // Cashier hit Cancel from the POS UI
-            if (line.payment_status === "retry") {
+            // Cashier hit Cancel or left the payment screen
+            if (this._cancelled || line.payment_status === "retry") {
                 return false;
             }
 
@@ -153,6 +187,14 @@ export class CloverPaymentInterface extends PaymentInterface {
             switch (status.state) {
                 case "approved":
                     line.transaction_id = status.clover_payment_id || cloverTransactionId;
+                    line.card_type = status.card_type || "Clover";
+                    if (line.set_receipt_info) {
+                        line.set_receipt_info(
+                            status.card_type || "Card",
+                            status.card_last4 || "",
+                            false,
+                        );
+                    }
                     line.set_payment_status("done");
                     return true;
                 case "rejected":
@@ -185,6 +227,13 @@ export class CloverPaymentInterface extends PaymentInterface {
             [[this.payment_method_id.id]],
             kwargs
         );
+    }
+
+    _showError(msg) {
+        this.env.services.notification.add(msg, {
+            type: "danger",
+            sticky: false,
+        });
     }
 
     _sleep(ms) {

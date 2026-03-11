@@ -588,6 +588,34 @@ class CloverTerminal(models.Model):
         )
         return result.get('elements', [])
 
+    def _payment_refund(self, clover_payment_id, amount_cents=None):
+        """Refund a completed Clover payment via REST v3.
+
+        If ``amount_cents`` is None, performs a full refund.
+        Otherwise, performs a partial refund for the given amount.
+        Returns the refund dict from Clover.
+        """
+        self.ensure_one()
+        payload = {}
+        if amount_cents is not None:
+            payload['amount'] = amount_cents
+        return self._api_request(
+            'POST',
+            f'/v3/merchants/{self.merchant_id}/payments/{clover_payment_id}/refunds',
+            payload=payload if payload else None,
+        )
+
+    def _payment_void(self, clover_payment_id):
+        """Void an auth-only payment via REST v3 (before settlement).
+
+        Returns the updated payment dict from Clover.
+        """
+        self.ensure_one()
+        return self._api_request(
+            'POST',
+            f'/v3/merchants/{self.merchant_id}/payments/{clover_payment_id}/void',
+        )
+
     def _payment_cancel_on_terminal(self):
         """Reset the terminal to dismiss any in-progress payment screen.
 

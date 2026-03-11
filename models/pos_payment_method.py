@@ -138,7 +138,12 @@ class PosPaymentMethod(models.Model):
 
         # Already terminal — no need to query Clover again
         if tx.state in ('approved', 'rejected', 'canceled', 'expired', 'error'):
-            return {'state': tx.state, 'clover_payment_id': tx.clover_payment_id or ''}
+            card_info = self._extract_card_info(tx)
+            return {
+                'state': tx.state,
+                'clover_payment_id': tx.clover_payment_id or '',
+                **card_info,
+            }
 
         terminal = self._get_clover_terminal()
         try:
@@ -164,11 +169,26 @@ class PosPaymentMethod(models.Model):
             if new_state != 'pending':
                 tx.write({'state': new_state, 'clover_payment_id': resolved_payment_id})
 
-            return {'state': new_state, 'clover_payment_id': resolved_payment_id}
+            card_info = self._extract_card_info(tx) if new_state == 'approved' else {}
+            return {'state': new_state, 'clover_payment_id': resolved_payment_id, **card_info}
 
         except Exception:
             # Don't surface polling errors — keep the JS retrying
             return {'state': 'pending', 'clover_payment_id': tx.clover_payment_id or ''}
+
+    def _extract_card_info(self, tx):
+        """Extract card type and last 4 digits from the stored Clover response."""
+        try:
+            if tx.raw_response_payload:
+                data = json.loads(tx.raw_response_payload)
+                card_txn = data.get('cardTransaction', {})
+                return {
+                    'card_type': card_txn.get('cardType', ''),
+                    'card_last4': card_txn.get('last4', ''),
+                }
+        except (json.JSONDecodeError, AttributeError):
+            pass
+        return {'card_type': '', 'card_last4': ''}
 
     def clover_cancel_payment(self, clover_transaction_id):
         """Cancel a pending Clover payment.
@@ -185,3 +205,18 @@ class PosPaymentMethod(models.Model):
         terminal._payment_cancel_on_terminal()
         tx.write({'state': 'canceled'})
         return {'success': True}
+
+    def clover_refund_payment(self, clover_payment_id, amount_cents=None):
+        """Refund an approved Clover payment.
+
+        Called from CloverPaymentInterface.send_payment_reversal().
+        If ``amount_cents`` is None, performs a full refund.
+        Returns ``{'success': True}`` or ``{'error': <msg>}``.
+        """
+        self.ensure_one()
+        terminal = self._get_clover_terminal()
+        try:
+            terminal._payment_refund(clover_payment_id, amount_cents)
+            return {'success': True}
+        except Exception as exc:
+            return {'error': str(exc)}
