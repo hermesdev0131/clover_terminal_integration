@@ -507,7 +507,7 @@ class CloverTerminal(models.Model):
         result = self._api_request(
             'POST',
             f'/v3/merchants/{self.merchant_id}/orders',
-            payload={'currency': 'USD', 'state': 'open'},
+            payload={'currency': self.company_id.currency_id.name or 'USD', 'state': 'open'},
         )
         clover_order_id = result.get('id')
         if not clover_order_id:
@@ -541,7 +541,7 @@ class CloverTerminal(models.Model):
             },
             connect=True,
             idempotency_key=idempotency_key,
-            timeout=15,
+            timeout=30,
         )
         return result.get('paymentId') or result.get('id') or ''
 

@@ -89,8 +89,9 @@ export class CloverPaymentInterface extends PaymentInterface {
                 order_uid: order.uid,
                 payment_type: "card",
             });
-        } catch (_e) {
-            this._showError(_t("Could not reach Clover. Check device/network."));
+        } catch (e) {
+            const msg = e?.data?.message || e?.message || _t("Could not reach Clover. Check device/network.");
+            this._showError(msg);
             line.set_payment_status("retry");
             return false;
         }
@@ -126,8 +127,9 @@ export class CloverPaymentInterface extends PaymentInterface {
                 order_uid: order.uid,
                 payment_type: "qr",
             });
-        } catch (_e) {
-            this._showError(_t("Could not reach Clover. Check device/network."));
+        } catch (e) {
+            const msg = e?.data?.message || e?.message || _t("Could not reach Clover. Check device/network.");
+            this._showError(msg);
             line.set_payment_status("retry");
             return false;
         }
