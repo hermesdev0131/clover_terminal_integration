@@ -198,7 +198,7 @@ class CloverTerminal(models.Model):
             'Authorization': f'Bearer {self.api_token}',
             'Content-Type': 'application/json',
             'Accept': 'application/json',
-            'X-Clover-Device-Id': self.device_serial,
+            'X-Clover-Device-Id': self.clover_device_id or self.device_serial,
             'X-POS-Id': self.raid,
         }
         if idempotency_key:
