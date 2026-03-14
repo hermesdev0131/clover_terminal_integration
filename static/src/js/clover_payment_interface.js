@@ -227,7 +227,7 @@ export class CloverPaymentInterface extends PaymentInterface {
             "pos.payment.method",
             method,
             [[this.payment_method_id.id]],
-            kwargs
+            { kwargs },
         );
     }
 
