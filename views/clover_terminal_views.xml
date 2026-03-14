@@ -14,7 +14,7 @@
                             type="object"
                             string="Authorize"
                             class="btn-warning"
-                            invisible="token_acquired or state == 'active'"
+                            invisible="(token_acquired and state != 'draft') or state == 'active'"
                             help="Open Clover OAuth page to acquire API token"/>
                     <button name="action_test_connection"
                             type="object"

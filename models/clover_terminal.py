@@ -455,7 +455,12 @@ class CloverTerminal(models.Model):
     def action_reset_draft(self):
         """Reset terminal back to draft."""
         self.ensure_one()
-        self.write({'state': 'draft', 'last_error': False})
+        self.write({
+            'state': 'draft',
+            'last_error': False,
+            'api_token': False,
+            'clover_device_id': False,
+        })
 
     # ------------------------------------------------------------------
     # Connect v1 device operations
