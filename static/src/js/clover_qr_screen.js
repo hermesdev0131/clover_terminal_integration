@@ -76,8 +76,7 @@ export class CloverQRScreen extends Component {
                 const result = await this.orm.call(
                     "pos.payment.method",
                     "clover_get_payment_status",
-                    [[this.props.paymentMethodId]],
-                    { clover_transaction_id: this.props.transactionId }
+                    [[this.props.paymentMethodId], this.props.transactionId],
                 );
 
                 const status = result.state || "pending";

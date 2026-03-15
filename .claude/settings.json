@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /opt/odoo18 -path */payment/payment_interface.js)",
+      "Bash(find /opt/odoo18 -name payment_interface*)",
+      "Bash(find /opt/odoo18 -name *.js)",
+      "Read(//usr/lib/python3/dist-packages/**)",
+      "Read(//etc/**)",
+      "Read(//home/**)"
+    ]
+  }
+}

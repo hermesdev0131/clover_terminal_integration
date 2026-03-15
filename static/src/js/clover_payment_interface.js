@@ -35,9 +35,7 @@ export class CloverPaymentInterface extends PaymentInterface {
         const line = order.get_paymentline_by_uuid(uuid);
         if (line?.transaction_id) {
             try {
-                await this._rpc("clover_cancel_payment", {
-                    clover_transaction_id: line.transaction_id,
-                });
+                await this._rpc("clover_cancel_payment", [line.transaction_id]);
             } catch (_e) {
                 // best-effort — terminal may have already settled
             }
@@ -52,9 +50,7 @@ export class CloverPaymentInterface extends PaymentInterface {
             return false;
         }
         try {
-            const result = await this._rpc("clover_refund_payment", {
-                clover_payment_id: String(line.transaction_id),
-            });
+            const result = await this._rpc("clover_refund_payment", [String(line.transaction_id)]);
             if (result?.error) {
                 this._showError(result.error);
                 return false;
@@ -84,11 +80,7 @@ export class CloverPaymentInterface extends PaymentInterface {
 
         let result;
         try {
-            result = await this._rpc("clover_create_payment", {
-                amount_cents: amountCents,
-                order_uid: order.uid,
-                payment_type: "card",
-            });
+            result = await this._rpc("clover_create_payment", [amountCents, order.uid, "card"]);
         } catch (e) {
             const msg = e?.data?.message || e?.message || _t("Could not reach Clover. Check device/network.");
             this._showError(msg);
@@ -122,11 +114,7 @@ export class CloverPaymentInterface extends PaymentInterface {
 
         let result;
         try {
-            result = await this._rpc("clover_create_payment", {
-                amount_cents: amountCents,
-                order_uid: order.uid,
-                payment_type: "qr",
-            });
+            result = await this._rpc("clover_create_payment", [amountCents, order.uid, "qr"]);
         } catch (e) {
             const msg = e?.data?.message || e?.message || _t("Could not reach Clover. Check device/network.");
             this._showError(msg);
@@ -179,9 +167,7 @@ export class CloverPaymentInterface extends PaymentInterface {
 
             let status;
             try {
-                status = await this._rpc("clover_get_payment_status", {
-                    clover_transaction_id: cloverTransactionId,
-                });
+                status = await this._rpc("clover_get_payment_status", [cloverTransactionId]);
             } catch (_e) {
                 continue; // network hiccup — keep polling
             }
@@ -222,13 +208,12 @@ export class CloverPaymentInterface extends PaymentInterface {
         return this.payment_method_id.clover_payment_type || "card";
     }
 
-    _rpc(method, kwargs = {}) {
-        return this.env.services.rpc("/web/dataset/call_kw", {
-            model: "pos.payment.method",
-            method: method,
-            args: [[this.payment_method_id.id]],
-            kwargs: kwargs,
-        });
+    _rpc(method, extraArgs = []) {
+        return this.env.services.orm.call(
+            "pos.payment.method",
+            method,
+            [[this.payment_method_id.id], ...extraArgs],
+        );
     }
 
     _showError(msg) {
