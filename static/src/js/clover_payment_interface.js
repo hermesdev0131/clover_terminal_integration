@@ -223,12 +223,12 @@ export class CloverPaymentInterface extends PaymentInterface {
     }
 
     _rpc(method, kwargs = {}) {
-        return this.env.services.orm.call(
-            "pos.payment.method",
-            method,
-            [[this.payment_method_id.id]],
-            { kwargs },
-        );
+        return this.env.services.rpc("/web/dataset/call_kw", {
+            model: "pos.payment.method",
+            method: method,
+            args: [[this.payment_method_id.id]],
+            kwargs: kwargs,
+        });
     }
 
     _showError(msg) {
