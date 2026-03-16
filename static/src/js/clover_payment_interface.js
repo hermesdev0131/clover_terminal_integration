@@ -9,7 +9,6 @@ const CONNECT_TIMEOUT_MS = 30000;   // 30s to establish WebSocket
 const PAYMENT_TIMEOUT_MS = 120000;  // 2 min hard timeout for payment
 const QR_POLL_INTERVAL_MS = 3000;   // 3s between QR status polls
 const RESET_RETRY_DELAY_MS = 3000;  // 3s wait after reset before retry
-const MAX_SECURE_PAY_RETRIES = 3;   // max reset+retry attempts
 
 export class CloverPaymentInterface extends PaymentInterface {
 
@@ -478,26 +477,17 @@ export class CloverPaymentInterface extends PaymentInterface {
             hasPayment: !!response.getPayment(),
         });
 
-        // SECURE_PAY retry: device stuck from previous session → reset and retry
-        if (!success && message.includes("SECURE_PAY") && this._retryCount < MAX_SECURE_PAY_RETRIES) {
-            this._retryCount++;
-            console.log(`[Clover] Device stuck in SECURE_PAY, reset attempt ${this._retryCount}/${MAX_SECURE_PAY_RETRIES}`);
-
-            // Alternate between SDK reset and REST reset for stronger effect
-            if (this._retryCount % 2 === 1) {
-                this._connector?.resetDevice();
-                // onResetDeviceResponse will trigger the delayed retry
-            } else {
-                // REST-based reset as fallback (different channel)
-                this._rpc("clover_cancel_qr_payment", [""]).catch(() => {});
-                setTimeout(() => {
-                    if (this._pendingSaleRequest && this._connector) {
-                        console.log("[Clover] Retrying sale after REST reset...");
-                        this._connector.sale(this._pendingSaleRequest);
-                    }
-                }, RESET_RETRY_DELAY_MS);
-            }
+        // SECURE_PAY: device has an orphaned payment in progress — try one reset
+        if (!success && message.includes("SECURE_PAY") && this._retryCount === 0) {
+            this._retryCount = 1;
+            console.log("[Clover] Device stuck in SECURE_PAY, attempting reset...");
+            this._connector?.resetDevice();
+            // onResetDeviceResponse will trigger the delayed retry
             return;
+        }
+        // If retry also failed, the device needs physical intervention
+        if (!success && message.includes("SECURE_PAY") && this._retryCount > 0) {
+            console.warn("[Clover] Device still stuck after reset — needs manual intervention");
         }
 
         const line = this._pendingLine;
@@ -556,13 +546,24 @@ export class CloverPaymentInterface extends PaymentInterface {
 
             if (resolvePayment) resolvePayment(true);
         } else {
-            const reason = response.getReason?.() || response.getMessage?.() ||
-                _t("Payment declined.");
+            const isStuckDevice = message.includes("SECURE_PAY");
+            const reason = isStuckDevice
+                ? _t("Device is busy with a previous payment. Cancel it on the device screen or restart the terminal, then try again.")
+                : (response.getReason?.() || response.getMessage?.() ||
+                    _t("Payment declined."));
 
             if (line) {
                 line.set_payment_status("retry");
             }
-            this._showError(reason);
+            if (isStuckDevice) {
+                // Sticky notification so cashier sees the device instruction
+                this.env.services.notification.add(reason, {
+                    type: "warning",
+                    sticky: true,
+                });
+            } else {
+                this._showError(reason);
+            }
 
             this._logTransaction(order, paymentType, 0, "",
                 "rejected", response, "", "", reason);
