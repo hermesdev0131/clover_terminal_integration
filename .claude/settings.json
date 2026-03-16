@@ -8,7 +8,18 @@
       "Read(//etc/**)",
       "Read(//home/**)",
       "WebFetch(domain:www.npmjs.com)",
-      "Bash(grep -oP 'function u\\\\\\(t,e,i,o\\\\\\)\\\\{[^}]+' /home/hermes/Documents/Work/clover_terminal_integration/static/src/lib/clover_sdk.js)"
+      "Bash(grep -oP 'function u\\\\\\(t,e,i,o\\\\\\)\\\\{[^}]+' /home/hermes/Documents/Work/clover_terminal_integration/static/src/lib/clover_sdk.js)",
+      "Bash(find /home/hermes -path */point_of_sale* -name *.xml -o -path */point_of_sale* -name *.js)",
+      "Bash(grep -r \"<Dialog\\\\|t-set-slot\" /home/hermes/Documents/Work --include=*.xml --include=*.js)",
+      "Bash(find /home/hermes -path *web* -name dialog.js -o -path *web* -name Dialog.js)",
+      "Bash(grep -r t-set-slot /home/hermes --include=*.xml)",
+      "Bash(grep -r \"slot.*body\\\\|slot.*footer\\\\|slot.*header\\\\|slot.*content\" /home/hermes --include=*.js --include=*.xml)",
+      "Read(//tmp/package/dist/**)",
+      "Bash(find /home/hermes -path */point_of_sale/static/src/xml/*.xml -type f)",
+      "Bash(find /home/hermes -path */web/static/src/core/dialog/dialog.xml -type f)",
+      "Bash(find /home/hermes -name dialog.xml -path */web/* -type f)",
+      "Bash(find /home/hermes -name dialog.js -path */web/static/src/core/* -type f)",
+      "Bash(gh api:*)"
     ],
     "additionalDirectories": [
       "/tmp/package/dist/bundle"
