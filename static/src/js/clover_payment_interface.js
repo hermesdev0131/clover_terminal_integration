@@ -201,13 +201,20 @@ export class CloverPaymentInterface extends PaymentInterface {
                 sdk.remotepay.ICloverConnectorListener.prototype,
                 {
                     onDeviceReady: () => {
-                        console.log("Clover device ready");
+                        console.log("[Clover] Device ready");
+                        this._connectorReady = true;
                         if (!resolved) {
                             resolved = true;
                             clearTimeout(timeout);
-                            this._connectorReady = true;
                             this._connector = connector;
                             resolve(connector);
+                        }
+                        // After resetDevice(), device fires onDeviceReady when truly idle
+                        if (this._pendingSaleRequest) {
+                            const req = this._pendingSaleRequest;
+                            this._pendingSaleRequest = null;
+                            console.log("[Clover] Device idle after reset, sending sale...");
+                            connector.sale(req);
                         }
                     },
                     onDeviceDisconnected: () => {
@@ -247,13 +254,7 @@ export class CloverPaymentInterface extends PaymentInterface {
                         connector.acceptSignature(request);
                     },
                     onResetDeviceResponse: () => {
-                        console.log("Clover device reset complete");
-                        // Now send the pending sale request
-                        if (this._pendingSaleRequest) {
-                            const req = this._pendingSaleRequest;
-                            this._pendingSaleRequest = null;
-                            connector.sale(req);
-                        }
+                        console.log("[Clover] Device reset acknowledged, waiting for device ready...");
                     },
                     onDeviceActivityStart: (event) => {
                         this._handleDeviceActivity(event);

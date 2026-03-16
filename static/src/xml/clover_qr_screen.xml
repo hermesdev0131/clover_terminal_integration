@@ -29,11 +29,11 @@
                     </div>
                     <!-- No QR payload — show scan-on-terminal message -->
                     <div t-else=""
-                         class="border rounded bg-light d-flex align-items-center justify-content-center flex-column"
-                         style="width:260px;height:260px;">
-                        <i class="fa fa-qrcode fa-4x text-muted mb-3"/>
-                        <p class="text-muted fw-bold mb-1">Scan QR on terminal</p>
-                        <p class="text-muted small mb-0">The QR code is displayed on the Clover device</p>
+                         class="border rounded d-flex align-items-center justify-content-center flex-column"
+                         style="width:260px;height:260px;background-color:#f8f9fa;">
+                        <i class="fa fa-qrcode fa-4x mb-3" style="color:#495057;"/>
+                        <p class="fw-bold mb-1" style="color:#212529;">Scan QR on terminal</p>
+                        <p class="small mb-0" style="color:#6c757d;">The QR code is displayed on the Clover device</p>
                     </div>
                 </div>
 
