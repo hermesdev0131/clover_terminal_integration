@@ -20,6 +20,7 @@ export class CloverPaymentInterface extends PaymentInterface {
         this._sdkConfig = null;
         this._qrDialogClose = null;
         this._qrUpdateFn = null;
+        this._pendingSaleRequest = null;
         this.enable_reversals();
     }
 
@@ -35,9 +36,13 @@ export class CloverPaymentInterface extends PaymentInterface {
         const line = order.get_paymentline_by_uuid(uuid);
         line.set_payment_status("waiting");
 
+        const paymentType = this._paymentType();
+        console.log(`[Clover] === Payment request: ${paymentType}, amount: ${line.amount}, uuid: ${uuid} ===`);
+
         try {
             // 1. Get SDK config from Odoo backend
             if (!this._sdkConfig) {
+                console.log("[Clover] Fetching SDK config...");
                 this._sdkConfig = await this._fetchSdkConfig();
             }
             if (this._sdkConfig.error) {
@@ -48,6 +53,10 @@ export class CloverPaymentInterface extends PaymentInterface {
             }
 
             // 2. Connect to device via WebSocket (reuses existing connection)
+            console.log("[Clover] Getting connector...", {
+                hasConnector: !!this._connector,
+                connectorReady: this._connectorReady,
+            });
             const connector = await this._getConnector();
             if (!connector) {
                 this._showError(_t("Could not connect to Clover device."));
@@ -64,11 +73,13 @@ export class CloverPaymentInterface extends PaymentInterface {
                 this._openQRDialog(line, order);
             }
 
+            console.log(`[Clover] Connector ready, executing sale: ${amountCents} cents, type: ${paymentType}`);
             return await this._executeSale(connector, line, order, amountCents, paymentType);
 
         } catch (e) {
             this._closeQRDialog();
             const msg = e?.message || _t("Clover payment failed.");
+            console.error("[Clover] Payment exception:", e);
             this._showError(msg);
             line.set_payment_status("retry");
             return false;
@@ -76,6 +87,7 @@ export class CloverPaymentInterface extends PaymentInterface {
     }
 
     async send_payment_cancel(order, uuid) {
+        console.log("[Clover] Cancel requested, uuid:", uuid);
         this._cancelled = true;
         this._closeQRDialog();
 
@@ -162,6 +174,7 @@ export class CloverPaymentInterface extends PaymentInterface {
             )
                 .setCloverServer(cfg.cloverServer)
                 .setFriendlyId(cfg.friendlyId)
+                .setForceConnect(true)
                 .build();
 
             const builderConfig = {};
@@ -201,11 +214,12 @@ export class CloverPaymentInterface extends PaymentInterface {
                     onDeviceDisconnected: () => {
                         console.warn("Clover device disconnected");
                         this._connectorReady = false;
-                        this._connector = null;
-                        if (!resolved) {
-                            resolved = true;
-                            clearTimeout(timeout);
-                            resolve(null);
+                        // During initial connection, don't resolve null —
+                        // forceConnect causes a brief disconnect→reconnect cycle.
+                        // The timeout will catch if reconnection never happens.
+                        if (resolved) {
+                            // Already connected and now lost connection
+                            this._connector = null;
                         }
                     },
                     onDeviceConnected: () => {
@@ -232,6 +246,15 @@ export class CloverPaymentInterface extends PaymentInterface {
                     },
                     onVerifySignatureRequest: (request) => {
                         connector.acceptSignature(request);
+                    },
+                    onResetDeviceResponse: () => {
+                        console.log("Clover device reset complete");
+                        // Now send the pending sale request
+                        if (this._pendingSaleRequest) {
+                            const req = this._pendingSaleRequest;
+                            this._pendingSaleRequest = null;
+                            connector.sale(req);
+                        }
                     },
                     onDeviceActivityStart: (event) => {
                         this._handleDeviceActivity(event);
@@ -306,7 +329,11 @@ export class CloverPaymentInterface extends PaymentInterface {
                 }
             }, PAYMENT_TIMEOUT_MS);
 
-            connector.sale(saleRequest);
+            // Reset device before sale to clear any stuck state (e.g. SECURE_PAY)
+            this._pendingSaleRequest = saleRequest;
+            console.log("Resetting device before sale...");
+            connector.resetDevice();
+            // Sale will be sent from onResetDeviceResponse
         });
     }
 
@@ -316,6 +343,15 @@ export class CloverPaymentInterface extends PaymentInterface {
 
     async _handleSaleResponse(response) {
         clearTimeout(this._paymentTimeout);
+
+        const success = response.getSuccess();
+        console.log("[Clover] Sale response:", {
+            success,
+            result: response.getResult?.(),
+            reason: response.getReason?.(),
+            message: response.getMessage?.(),
+            hasPayment: !!response.getPayment(),
+        });
 
         const line = this._pendingLine;
         const resolvePayment = this._pendingResolve;
