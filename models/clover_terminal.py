@@ -607,12 +607,20 @@ class CloverTerminal(models.Model):
         Returns the refund dict from Clover.
         """
         self.ensure_one()
+        # Fetch payment to get its order ID (required by v3 refund endpoint)
+        payment = self._api_request(
+            'GET',
+            f'/v3/merchants/{self.merchant_id}/payments/{clover_payment_id}',
+        )
+        order_id = payment.get('order', {}).get('id', '')
+        if not order_id:
+            raise UserError(_('Cannot refund: payment has no associated Clover order.'))
         payload = {}
         if amount_cents is not None:
             payload['amount'] = amount_cents
         return self._api_request(
             'POST',
-            f'/v3/merchants/{self.merchant_id}/payments/{clover_payment_id}/refunds',
+            f'/v3/merchants/{self.merchant_id}/orders/{order_id}/payments/{clover_payment_id}/refunds',
             payload=payload if payload else None,
         )
 

@@ -367,6 +367,9 @@ export class CloverPaymentInterface extends PaymentInterface {
         const amountCents = Math.round(line.amount * 100);
         console.log(`[Clover] Creating QR payment via REST: ${amountCents} cents`);
 
+        // Release SDK WebSocket so device is free for Connect v1 REST
+        this._disposeConnector();
+
         // 1. Create QR payment on backend → get QR code data
         const result = await this._rpc("clover_create_qr_payment", [
             order.uid || "", amountCents,
