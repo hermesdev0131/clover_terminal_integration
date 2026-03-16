@@ -8,6 +8,8 @@ import { CloverQRScreen } from "./clover_qr_screen";
 const CONNECT_TIMEOUT_MS = 30000;   // 30s to establish WebSocket
 const PAYMENT_TIMEOUT_MS = 120000;  // 2 min hard timeout for payment
 const QR_POLL_INTERVAL_MS = 3000;   // 3s between QR status polls
+const RESET_RETRY_DELAY_MS = 3000;  // 3s wait after reset before retry
+const MAX_SECURE_PAY_RETRIES = 3;   // max reset+retry attempts
 
 export class CloverPaymentInterface extends PaymentInterface {
 
@@ -21,7 +23,7 @@ export class CloverPaymentInterface extends PaymentInterface {
         this._sdkConfig = null;
         this._qrDialogClose = null;
         this._pendingSaleRequest = null;
-        this._retried = false;
+        this._retryCount = 0;
         this._qrPollTimer = null;
         this._qrOrderId = null;
         this.enable_reversals();
@@ -260,12 +262,15 @@ export class CloverPaymentInterface extends PaymentInterface {
                     },
                     onResetDeviceResponse: () => {
                         console.log("[Clover] Device reset acknowledged");
-                        // Retry sale after SECURE_PAY reset
-                        if (this._retried && this._pendingSaleRequest && this._connector) {
-                            const req = this._pendingSaleRequest;
-                            this._pendingSaleRequest = null;
-                            console.log("[Clover] Retrying sale after reset...");
-                            this._connector.sale(req);
+                        // Retry sale after SECURE_PAY reset (with delay for device to settle)
+                        if (this._retryCount > 0 && this._pendingSaleRequest && this._connector) {
+                            console.log(`[Clover] Waiting ${RESET_RETRY_DELAY_MS}ms before retry ${this._retryCount}/${MAX_SECURE_PAY_RETRIES}...`);
+                            setTimeout(() => {
+                                if (this._pendingSaleRequest && this._connector) {
+                                    console.log("[Clover] Retrying sale after reset...");
+                                    this._connector.sale(this._pendingSaleRequest);
+                                }
+                            }, RESET_RETRY_DELAY_MS);
                         }
                     },
                     onDeviceActivityStart: (event) => {
@@ -332,7 +337,7 @@ export class CloverPaymentInterface extends PaymentInterface {
 
             // Store sale request for potential SECURE_PAY retry
             this._pendingSaleRequest = saleRequest;
-            this._retried = false;
+            this._retryCount = 0;
             console.log("[Clover] Sending card sale request...");
             connector.sale(saleRequest);
         });
@@ -456,12 +461,25 @@ export class CloverPaymentInterface extends PaymentInterface {
             hasPayment: !!response.getPayment(),
         });
 
-        // SECURE_PAY retry: device stuck from previous session → reset and retry once
-        if (!success && message.includes("SECURE_PAY") && !this._retried) {
-            console.log("[Clover] Device stuck in SECURE_PAY, resetting and retrying...");
-            this._retried = true;
-            this._connector?.resetDevice();
-            // onResetDeviceResponse will trigger the retry
+        // SECURE_PAY retry: device stuck from previous session → reset and retry
+        if (!success && message.includes("SECURE_PAY") && this._retryCount < MAX_SECURE_PAY_RETRIES) {
+            this._retryCount++;
+            console.log(`[Clover] Device stuck in SECURE_PAY, reset attempt ${this._retryCount}/${MAX_SECURE_PAY_RETRIES}`);
+
+            // Alternate between SDK reset and REST reset for stronger effect
+            if (this._retryCount % 2 === 1) {
+                this._connector?.resetDevice();
+                // onResetDeviceResponse will trigger the delayed retry
+            } else {
+                // REST-based reset as fallback (different channel)
+                this._rpc("clover_cancel_qr_payment", [""]).catch(() => {});
+                setTimeout(() => {
+                    if (this._pendingSaleRequest && this._connector) {
+                        console.log("[Clover] Retrying sale after REST reset...");
+                        this._connector.sale(this._pendingSaleRequest);
+                    }
+                }, RESET_RETRY_DELAY_MS);
+            }
             return;
         }
 
@@ -473,7 +491,7 @@ export class CloverPaymentInterface extends PaymentInterface {
         this._pendingResolve = null;
         this._pendingOrder = null;
         this._pendingPaymentType = null;
-        this._retried = false;
+        this._retryCount = 0;
 
         // Close QR dialog if open
         this._closeQRDialog();
