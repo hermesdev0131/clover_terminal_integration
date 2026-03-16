@@ -133,6 +133,72 @@ class PosPaymentMethod(models.Model):
         tx.write({'state': 'canceled'})
         return {'success': True}
 
+    def clover_create_qr_payment(self, order_uid, amount_cents):
+        """Create a Clover order and send a QR-only payment via REST API.
+
+        Returns {qr_payload, clover_payment_id, clover_order_id} or {error}.
+        """
+        self.ensure_one()
+        terminal = self._get_clover_terminal()
+        try:
+            clover_order_id = terminal._payment_create_clover_order(
+                amount_cents, order_uid)
+            idem_key = f'{order_uid}_qr_{int(time.time())}'
+            clover_payment_id, qr_payload = terminal._payment_send_qr(
+                clover_order_id, amount_cents, idem_key)
+            return {
+                'clover_order_id': clover_order_id,
+                'clover_payment_id': clover_payment_id,
+                'qr_payload': qr_payload,
+            }
+        except Exception as exc:
+            return {'error': str(exc)}
+
+    def clover_poll_qr_payment(self, clover_order_id, clover_payment_id):
+        """Poll QR payment status. Returns {state, clover_payment_id}.
+
+        state: 'pending' | 'approved' | 'rejected' | 'canceled'
+        """
+        self.ensure_one()
+        terminal = self._get_clover_terminal()
+        try:
+            # Try direct payment status first
+            if clover_payment_id:
+                payment = terminal._payment_get_status(clover_payment_id)
+                result_str = payment.get('result', '')
+                state = _CLOVER_RESULT_MAP.get(result_str, 'pending')
+                return {
+                    'state': state,
+                    'clover_payment_id': clover_payment_id,
+                    'card_type': payment.get('cardTransaction', {}).get('cardType', ''),
+                    'card_last4': payment.get('cardTransaction', {}).get('last4', ''),
+                }
+            # Fallback: check order payments (for async QR)
+            payments = terminal._payment_get_order_payments(clover_order_id)
+            for p in payments:
+                result_str = p.get('result', '')
+                state = _CLOVER_RESULT_MAP.get(result_str, 'pending')
+                if state == 'approved':
+                    return {
+                        'state': 'approved',
+                        'clover_payment_id': p.get('id', ''),
+                        'card_type': p.get('cardTransaction', {}).get('cardType', ''),
+                        'card_last4': p.get('cardTransaction', {}).get('last4', ''),
+                    }
+            return {'state': 'pending', 'clover_payment_id': clover_payment_id}
+        except Exception as exc:
+            return {'state': 'error', 'error': str(exc)}
+
+    def clover_cancel_qr_payment(self, clover_order_id):
+        """Cancel a pending QR payment by resetting the terminal."""
+        self.ensure_one()
+        terminal = self._get_clover_terminal()
+        try:
+            terminal._payment_cancel_on_terminal()
+        except Exception:
+            pass
+        return {'success': True}
+
     def clover_refund_payment(self, clover_payment_id, amount_cents=None):
         """Refund an approved Clover payment via REST v3.
 
