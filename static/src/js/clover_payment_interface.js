@@ -21,6 +21,7 @@ export class CloverPaymentInterface extends PaymentInterface {
         this._qrDialogClose = null;
         this._qrUpdateFn = null;
         this._pendingSaleRequest = null;
+        this._retried = false;
         this.enable_reversals();
     }
 
@@ -209,13 +210,6 @@ export class CloverPaymentInterface extends PaymentInterface {
                             this._connector = connector;
                             resolve(connector);
                         }
-                        // After resetDevice(), device fires onDeviceReady when truly idle
-                        if (this._pendingSaleRequest) {
-                            const req = this._pendingSaleRequest;
-                            this._pendingSaleRequest = null;
-                            console.log("[Clover] Device idle after reset, sending sale...");
-                            connector.sale(req);
-                        }
                     },
                     onDeviceDisconnected: () => {
                         console.warn("Clover device disconnected");
@@ -329,11 +323,11 @@ export class CloverPaymentInterface extends PaymentInterface {
                 }
             }, PAYMENT_TIMEOUT_MS);
 
-            // Reset device before sale to clear any stuck state (e.g. SECURE_PAY)
+            // Store sale request for potential SECURE_PAY retry
             this._pendingSaleRequest = saleRequest;
-            console.log("Resetting device before sale...");
-            connector.resetDevice();
-            // Sale will be sent from onResetDeviceResponse
+            this._retried = false;
+            console.log("[Clover] Sending sale request...");
+            connector.sale(saleRequest);
         });
     }
 
@@ -345,13 +339,31 @@ export class CloverPaymentInterface extends PaymentInterface {
         clearTimeout(this._paymentTimeout);
 
         const success = response.getSuccess();
+        const message = response.getMessage?.() || "";
         console.log("[Clover] Sale response:", {
             success,
             result: response.getResult?.(),
             reason: response.getReason?.(),
-            message: response.getMessage?.(),
+            message,
             hasPayment: !!response.getPayment(),
         });
+
+        // SECURE_PAY retry: device stuck from previous session → reset and retry once
+        if (!success && message.includes("SECURE_PAY") && !this._retried) {
+            console.log("[Clover] Device stuck in SECURE_PAY, resetting and retrying...");
+            this._retried = true;
+            this._connector?.resetDevice();
+            // Wait for reset to settle, then resend the sale
+            setTimeout(() => {
+                if (this._pendingSaleRequest && this._connector) {
+                    const req = this._pendingSaleRequest;
+                    this._pendingSaleRequest = null;
+                    console.log("[Clover] Retrying sale after reset...");
+                    this._connector.sale(req);
+                }
+            }, 3000);
+            return;
+        }
 
         const line = this._pendingLine;
         const resolvePayment = this._pendingResolve;
@@ -361,6 +373,7 @@ export class CloverPaymentInterface extends PaymentInterface {
         this._pendingResolve = null;
         this._pendingOrder = null;
         this._pendingPaymentType = null;
+        this._retried = false;
 
         // Close QR dialog if open
         this._closeQRDialog();
