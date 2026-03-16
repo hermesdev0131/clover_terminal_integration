@@ -74,10 +74,8 @@ export class CloverPaymentInterface extends PaymentInterface {
                 // best-effort
             }
         }
-        if (this._pendingResolve) {
-            this._pendingResolve({ success: false, cancelled: true });
-            this._pendingResolve = null;
-        }
+        // Don't resolve pending — let onSaleResponse handle it
+        // If payment already completed, onSaleResponse will auto-void
         return super.send_payment_cancel(order, uuid);
     }
 
@@ -131,7 +129,16 @@ export class CloverPaymentInterface extends PaymentInterface {
             }
 
             const cfg = this._sdkConfig;
+            console.log("Clover SDK config:", {
+                applicationId: cfg.applicationId,
+                deviceId: cfg.deviceId,
+                deviceSerial: cfg.deviceSerial,
+                merchantId: cfg.merchantId,
+                cloverServer: cfg.cloverServer,
+                hasToken: !!cfg.accessToken,
+            });
 
+            // SDK constructor: (applicationId, deviceId, merchantId, accessToken)
             const cloudConfig = new sdk.WebSocketCloudCloverDeviceConfigurationBuilder(
                 cfg.applicationId,
                 cfg.deviceId,
@@ -197,11 +204,9 @@ export class CloverPaymentInterface extends PaymentInterface {
                         this._handleRefundResponse(response);
                     },
                     onConfirmPaymentRequest: (request) => {
-                        // Auto-accept payment challenges (e.g. duplicate check)
                         connector.acceptPayment(request.getPayment());
                     },
                     onVerifySignatureRequest: (request) => {
-                        // Auto-accept signature
                         connector.acceptSignature(request);
                     },
                 },
@@ -241,23 +246,23 @@ export class CloverPaymentInterface extends PaymentInterface {
             extras["currency"] = "ARS";
             saleRequest.setRegionalExtras(extras);
 
-            // Card entry methods
-            if (paymentType === "qr") {
-                // QR-only: disable card entry methods
-                saleRequest.setCardEntryMethods(0);
-            } else {
-                // Card: allow all entry methods
-                saleRequest.setCardEntryMethods(
-                    sdk.CardEntryMethods?.DEFAULT || 15,
-                );
-            }
+            // Card entry methods — both card and QR use all methods
+            // The device decides the UI; QR is handled by the device's native apps
+            saleRequest.setCardEntryMethods(
+                sdk.CardEntryMethods?.DEFAULT || 15,
+            );
 
             this._pendingLine = line;
             this._pendingResolve = resolve;
             this._pendingOrder = order;
             this._pendingPaymentType = paymentType;
 
-            line.set_payment_status("waitingCard");
+            // Show appropriate status based on payment type
+            if (paymentType === "qr") {
+                line.set_payment_status("waiting");
+            } else {
+                line.set_payment_status("waitingCard");
+            }
 
             // Hard timeout
             this._paymentTimeout = setTimeout(() => {
@@ -290,8 +295,6 @@ export class CloverPaymentInterface extends PaymentInterface {
         this._pendingOrder = null;
         this._pendingPaymentType = null;
 
-        if (!line || !resolvePayment) return;
-
         const success = response.getSuccess();
         const payment = response.getPayment();
 
@@ -301,54 +304,56 @@ export class CloverPaymentInterface extends PaymentInterface {
             const cardType = cardTxn.getCardType?.() || "Card";
             const cardLast4 = cardTxn.getLast4?.() || "";
 
-            line.transaction_id = cloverPaymentId;
-            line.card_type = cardType;
-            if (line.set_receipt_info) {
-                line.set_receipt_info(cardType, cardLast4, false);
-            }
-            line.set_payment_status("done");
-
-            // Log transaction to Odoo backend
-            try {
-                await this._rpc("clover_log_transaction", [
-                    order?.uid || "",
-                    paymentType || "card",
-                    payment.getAmount?.() || 0,
-                    cloverPaymentId,
-                    "approved",
-                    JSON.stringify(response),
-                    cardType,
-                    cardLast4,
-                    "",
-                ]);
-            } catch (_e) {
-                // non-fatal — payment already succeeded
+            // If user cancelled but payment completed on device → auto-void
+            if (this._cancelled) {
+                console.warn("Payment completed after cancel — voiding payment", cloverPaymentId);
+                try {
+                    const sdk = window.clover;
+                    const voidRequest = new sdk.remotepay.VoidPaymentRequest();
+                    voidRequest.setPaymentId(cloverPaymentId);
+                    voidRequest.setOrderId(payment.getOrder?.()?.getId?.() || "");
+                    voidRequest.setVoidReason(sdk.order.VoidReason.USER_CANCEL);
+                    this._connector?.voidPayment(voidRequest);
+                } catch (_e) {
+                    console.error("Auto-void failed:", _e);
+                }
+                // Log the voided transaction
+                this._logTransaction(order, paymentType, 0, cloverPaymentId,
+                    "canceled", response, cardType, cardLast4,
+                    "Auto-voided: user cancelled during payment");
+                if (resolvePayment) resolvePayment(false);
+                return;
             }
 
-            resolvePayment(true);
+            if (line) {
+                line.transaction_id = cloverPaymentId;
+                line.card_type = cardType;
+                if (line.set_receipt_info) {
+                    line.set_receipt_info(cardType, cardLast4, false);
+                }
+                line.set_payment_status("done");
+            }
+
+            // Log approved transaction
+            this._logTransaction(order, paymentType,
+                payment.getAmount?.() || 0, cloverPaymentId,
+                "approved", response, cardType, cardLast4, "");
+
+            if (resolvePayment) resolvePayment(true);
         } else {
-            const reason = response.getReason?.() || _t("Payment declined.");
-            line.set_payment_status("retry");
+            const reason = response.getReason?.() || response.getMessage?.() ||
+                _t("Payment declined.");
+
+            if (line) {
+                line.set_payment_status("retry");
+            }
             this._showError(reason);
 
-            // Log failed transaction
-            try {
-                await this._rpc("clover_log_transaction", [
-                    order?.uid || "",
-                    paymentType || "card",
-                    0,
-                    "",
-                    "rejected",
-                    JSON.stringify(response),
-                    "",
-                    "",
-                    reason,
-                ]);
-            } catch (_e) {
-                // non-fatal
-            }
+            // Log rejected transaction
+            this._logTransaction(order, paymentType, 0, "",
+                "rejected", response, "", "", reason);
 
-            resolvePayment(false);
+            if (resolvePayment) resolvePayment(false);
         }
     }
 
@@ -357,6 +362,36 @@ export class CloverPaymentInterface extends PaymentInterface {
             console.log("Clover refund successful");
         } else {
             console.warn("Clover refund failed:", response.getReason?.());
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Transaction Logging
+    // ------------------------------------------------------------------
+
+    async _logTransaction(order, paymentType, amount, cloverPaymentId,
+                          state, response, cardType, cardLast4, errorMsg) {
+        try {
+            let rawResponse = "";
+            try {
+                rawResponse = JSON.stringify(response);
+            } catch (_e) {
+                rawResponse = String(response);
+            }
+            await this._rpc("clover_log_transaction", [
+                order?.uid || "",
+                paymentType || "card",
+                amount || 0,
+                cloverPaymentId || "",
+                state || "error",
+                rawResponse,
+                cardType || "",
+                cardLast4 || "",
+                errorMsg || "",
+            ]);
+        } catch (_e) {
+            // non-fatal — don't break payment flow for logging
+            console.warn("Failed to log Clover transaction:", _e);
         }
     }
 

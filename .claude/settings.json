@@ -7,7 +7,8 @@
       "Read(//usr/lib/python3/dist-packages/**)",
       "Read(//etc/**)",
       "Read(//home/**)",
-      "WebFetch(domain:www.npmjs.com)"
+      "WebFetch(domain:www.npmjs.com)",
+      "Bash(grep -oP 'function u\\\\\\(t,e,i,o\\\\\\)\\\\{[^}]+' /home/hermes/Documents/Work/clover_terminal_integration/static/src/lib/clover_sdk.js)"
     ],
     "additionalDirectories": [
       "/tmp/package/dist/bundle"

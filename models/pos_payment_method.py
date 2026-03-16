@@ -1,4 +1,5 @@
 import json
+import time
 
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError
@@ -89,6 +90,7 @@ class PosPaymentMethod(models.Model):
             'accessToken': terminal.api_token,
             'merchantId': terminal.merchant_id,
             'deviceId': terminal.clover_device_id,
+            'deviceSerial': terminal.device_serial,
             'applicationId': terminal.raid,
             'cloverServer': _CLOVER_SDK_SERVERS.get(terminal.environment, ''),
             'friendlyId': f'odoo-pos-{self.env.company.id}',
@@ -118,7 +120,7 @@ class PosPaymentMethod(models.Model):
             'raw_response_payload': raw_response or '',
             'error_message': error_message or '',
             'attempt_number': 1,
-            'idempotency_key': f'{order_uid}_{payment_type}',
+            'idempotency_key': f'{order_uid}_{payment_type}_{int(time.time())}',
         })
         return {'transaction_id': tx.id}
 
