@@ -280,7 +280,7 @@ export class CloverPaymentInterface extends PaymentInterface {
 
                         // Retry sale after SECURE_PAY reset (with delay for device to settle)
                         if (this._retryCount > 0 && this._pendingSaleRequest && this._connector) {
-                            console.log(`[Clover] Waiting ${RESET_RETRY_DELAY_MS}ms before retry ${this._retryCount}/${MAX_SECURE_PAY_RETRIES}...`);
+                            console.log(`[Clover] Waiting ${RESET_RETRY_DELAY_MS}ms before retry...`);
                             setTimeout(() => {
                                 if (this._pendingSaleRequest && this._connector) {
                                     console.log("[Clover] Retrying sale after reset...");
@@ -531,14 +531,26 @@ export class CloverPaymentInterface extends PaymentInterface {
                 return;
             }
 
-            if (line) {
-                line.transaction_id = cloverPaymentId;
-                line.card_type = cardType;
-                if (line.set_receipt_info) {
-                    line.set_receipt_info(cardType, cardLast4, false);
-                }
-                line.set_payment_status("done");
+            // Late success: Odoo timed out but device completed payment
+            if (!line) {
+                console.warn("[Clover] Late payment success — Odoo timed out but device charged. Payment ID:", cloverPaymentId);
+                this._logTransaction(order, paymentType,
+                    payment.getAmount?.() || 0, cloverPaymentId,
+                    "approved", response, cardType, cardLast4,
+                    "Late success: Odoo timed out before device completed");
+                this.env.services.notification.add(
+                    _t("Payment was charged on the device (ID: %s). Please verify and reconcile manually.", cloverPaymentId),
+                    { type: "warning", sticky: true },
+                );
+                return;
             }
+
+            line.transaction_id = cloverPaymentId;
+            line.card_type = cardType;
+            if (line.set_receipt_info) {
+                line.set_receipt_info(cardType, cardLast4, false);
+            }
+            line.set_payment_status("done");
 
             this._logTransaction(order, paymentType,
                 payment.getAmount?.() || 0, cloverPaymentId,
@@ -584,6 +596,19 @@ export class CloverPaymentInterface extends PaymentInterface {
         const state = event.getEventState?.() || "";
         const message = event.getMessage?.() || "";
         console.log("Clover device activity:", state, message);
+
+        // Reset Odoo hard timeout while device is still active
+        if (this._pendingResolve && this._pendingLine) {
+            clearTimeout(this._paymentTimeout);
+            this._paymentTimeout = setTimeout(() => {
+                if (this._pendingResolve) {
+                    this._pendingResolve(false);
+                    this._pendingResolve = null;
+                    this._pendingLine = null;
+                    this._showError(_t("Payment timed out."));
+                }
+            }, PAYMENT_TIMEOUT_MS);
+        }
     }
 
     // ------------------------------------------------------------------
