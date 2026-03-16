@@ -19,7 +19,13 @@
       "Bash(find /home/hermes -path */web/static/src/core/dialog/dialog.xml -type f)",
       "Bash(find /home/hermes -name dialog.xml -path */web/* -type f)",
       "Bash(find /home/hermes -name dialog.js -path */web/static/src/core/* -type f)",
-      "Bash(gh api:*)"
+      "Bash(gh api:*)",
+      "Bash(find /home -type f -name *.py -path */point_of_sale/*)",
+      "Bash(find /opt -type f -name *.py -path */point_of_sale/*)",
+      "Read(//usr/**)",
+      "Bash(grep \"\\\\.py$\")",
+      "Read(//var/**)",
+      "Bash(find ~ -name *.xml -path */point_of_sale/*)"
     ],
     "additionalDirectories": [
       "/tmp/package/dist/bundle"

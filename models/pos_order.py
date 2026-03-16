@@ -1,4 +1,8 @@
+import logging
+
 from odoo import api, models
+
+_logger = logging.getLogger(__name__)
 
 
 class PosOrder(models.Model):
@@ -9,6 +13,15 @@ class PosOrder(models.Model):
         """Link Clover transactions to the created POS orders after sync."""
         result = super().sync_from_ui(orders)
 
+        try:
+            self._link_clover_transactions(result)
+        except Exception:
+            _logger.exception("Failed to link Clover transactions to POS orders")
+
+        return result
+
+    def _link_clover_transactions(self, result):
+        """Best-effort linking — must never break order sync."""
         for order_data in result.get('pos.order', []):
             order_id = order_data.get('id')
             if not order_id:
@@ -23,7 +36,6 @@ class PosOrder(models.Model):
                     payment.payment_method_id.use_payment_terminal == 'clover'
                     and payment.transaction_id
                 ):
-                    # transaction_id holds the clover_payment_id set by JS
                     txs = self.env['clover.transaction'].sudo().search([
                         '|',
                         ('clover_payment_id', '=', payment.transaction_id),
@@ -34,8 +46,6 @@ class PosOrder(models.Model):
                             'pos_order_id': order.id,
                             'pos_config_id': order.config_id.id,
                         })
-
-        return result
 
     @staticmethod
     def _safe_int(val):

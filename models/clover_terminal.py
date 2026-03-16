@@ -244,7 +244,13 @@ class CloverTerminal(models.Model):
                 json=payload,
                 timeout=timeout,
             )
-            body = resp.json() if resp.content else {}
+            try:
+                body = resp.json() if resp.content else {}
+            except (ValueError, TypeError):
+                body = {}
+            # Clover sometimes returns non-dict JSON (e.g. bare `true`)
+            if not isinstance(body, dict):
+                body = {'_raw': body}
             log_vals['response_payload'] = json.dumps(body, default=str)
             log_vals['http_status'] = resp.status_code
 
