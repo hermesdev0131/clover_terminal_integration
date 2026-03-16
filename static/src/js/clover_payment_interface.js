@@ -66,7 +66,6 @@ export class CloverPaymentInterface extends PaymentInterface {
 
             // 3. Send sale request
             const amountCents = Math.round(line.amount * 100);
-            const paymentType = this._paymentType();
 
             // For QR: open dialog on Odoo screen
             if (paymentType === "qr") {
@@ -365,7 +364,6 @@ export class CloverPaymentInterface extends PaymentInterface {
         // Close QR dialog if open
         this._closeQRDialog();
 
-        const success = response.getSuccess();
         const payment = response.getPayment();
 
         if (success && payment) {
