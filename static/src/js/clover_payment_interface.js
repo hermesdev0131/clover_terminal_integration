@@ -147,6 +147,7 @@ export class CloverPaymentInterface extends PaymentInterface {
             )
                 .setCloverServer(cfg.cloverServer)
                 .setFriendlyId(cfg.friendlyId)
+                .setForceConnect(true)
                 .build();
 
             const builderConfig = {};
@@ -185,6 +186,7 @@ export class CloverPaymentInterface extends PaymentInterface {
                     onDeviceDisconnected: () => {
                         console.warn("Clover device disconnected");
                         this._connectorReady = false;
+                        this._connector = null;
                         if (!resolved) {
                             resolved = true;
                             clearTimeout(timeout);
@@ -202,6 +204,13 @@ export class CloverPaymentInterface extends PaymentInterface {
                     },
                     onRefundPaymentResponse: (response) => {
                         this._handleRefundResponse(response);
+                    },
+                    onVoidPaymentResponse: (response) => {
+                        if (response.getSuccess()) {
+                            console.log("Clover void successful");
+                        } else {
+                            console.warn("Clover void failed:", response.getReason?.());
+                        }
                     },
                     onConfirmPaymentRequest: (request) => {
                         connector.acceptPayment(request.getPayment());
@@ -246,11 +255,14 @@ export class CloverPaymentInterface extends PaymentInterface {
             extras["currency"] = "ARS";
             saleRequest.setRegionalExtras(extras);
 
-            // Card entry methods — both card and QR use all methods
-            // The device decides the UI; QR is handled by the device's native apps
-            saleRequest.setCardEntryMethods(
-                sdk.CardEntryMethods?.DEFAULT || 15,
-            );
+            // Configure entry methods based on payment type
+            if (paymentType === "qr") {
+                saleRequest.setPresentQrcOnly(true);
+            } else {
+                saleRequest.setCardEntryMethods(
+                    sdk.CardEntryMethods?.DEFAULT || 15,
+                );
+            }
 
             this._pendingLine = line;
             this._pendingResolve = resolve;
