@@ -24,7 +24,7 @@ Key Features:
 
 Technical Details:
 ------------------
-* REST Pay Display API integration (Cloud Pay Display)
+* Remote Pay Cloud SDK integration (WebSocket via Cloud Pay Display)
 * OAuth 2.0 token management
 * Per-transaction settings: presentQrcOnly, CardEntryMethods
 * OWL 2 frontend components (PaymentInterface pattern)
@@ -46,6 +46,7 @@ Technical Details:
     ],
     'assets': {
         'point_of_sale._assets_pos': [
+            'clover_terminal_integration/static/src/lib/clover_sdk.js',
             'clover_terminal_integration/static/src/xml/clover_qr_screen.xml',
             'clover_terminal_integration/static/src/js/clover_qr_screen.js',
             'clover_terminal_integration/static/src/js/clover_payment_interface.js',

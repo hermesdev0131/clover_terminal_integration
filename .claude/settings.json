@@ -6,7 +6,11 @@
       "Bash(find /opt/odoo18 -name *.js)",
       "Read(//usr/lib/python3/dist-packages/**)",
       "Read(//etc/**)",
-      "Read(//home/**)"
+      "Read(//home/**)",
+      "WebFetch(domain:www.npmjs.com)"
+    ],
+    "additionalDirectories": [
+      "/tmp/package/dist/bundle"
     ]
   }
 }

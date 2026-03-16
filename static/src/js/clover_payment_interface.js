@@ -3,16 +3,19 @@
 import { PaymentInterface } from "@point_of_sale/app/payment/payment_interface";
 import { register_payment_method } from "@point_of_sale/app/store/pos_store";
 import { _t } from "@web/core/l10n/translation";
-import { CloverQRScreen } from "./clover_qr_screen";
 
-const POLL_INTERVAL_MS = 3000;      // poll Clover status every 3 s
-const PAYMENT_TIMEOUT_MS = 120000;  // hard timeout after 2 min
+const CONNECT_TIMEOUT_MS = 30000;   // 30s to establish WebSocket
+const PAYMENT_TIMEOUT_MS = 120000;  // 2 min hard timeout for payment
 
 export class CloverPaymentInterface extends PaymentInterface {
 
     setup(...args) {
         super.setup(...args);
         this._cancelled = false;
+        this._connector = null;
+        this._pendingResolve = null;
+        this._pendingLine = null;
+        this._sdkConfig = null;
         this.enable_reversals();
     }
 
@@ -24,21 +27,56 @@ export class CloverPaymentInterface extends PaymentInterface {
         this._cancelled = false;
         await super.send_payment_request(uuid);
 
-        if (this._paymentType() === "qr") {
-            return this._sendQRPaymentRequest(uuid);
+        const order = this.pos.get_order();
+        const line = order.get_paymentline_by_uuid(uuid);
+        line.set_payment_status("waiting");
+
+        try {
+            // 1. Get SDK config from Odoo backend
+            if (!this._sdkConfig) {
+                this._sdkConfig = await this._fetchSdkConfig();
+            }
+            if (this._sdkConfig.error) {
+                this._showError(this._sdkConfig.error);
+                this._sdkConfig = null;
+                line.set_payment_status("retry");
+                return false;
+            }
+
+            // 2. Connect to device via WebSocket
+            const connector = await this._getConnector();
+            if (!connector) {
+                this._showError(_t("Could not connect to Clover device."));
+                line.set_payment_status("retry");
+                return false;
+            }
+
+            // 3. Send sale request
+            const amountCents = Math.round(line.amount * 100);
+            const paymentType = this._paymentType();
+
+            return await this._executeSale(connector, line, order, amountCents, paymentType);
+
+        } catch (e) {
+            const msg = e?.message || _t("Clover payment failed.");
+            this._showError(msg);
+            line.set_payment_status("retry");
+            return false;
         }
-        return this._sendCardPaymentRequest(uuid);
     }
 
     async send_payment_cancel(order, uuid) {
         this._cancelled = true;
-        const line = order.get_paymentline_by_uuid(uuid);
-        if (line?.transaction_id) {
+        if (this._connector) {
             try {
-                await this._rpc("clover_cancel_payment", [line.transaction_id]);
+                this._connector.resetDevice();
             } catch (_e) {
-                // best-effort — terminal may have already settled
+                // best-effort
             }
+        }
+        if (this._pendingResolve) {
+            this._pendingResolve({ success: false, cancelled: true });
+            this._pendingResolve = null;
         }
         return super.send_payment_cancel(order, uuid);
     }
@@ -50,7 +88,8 @@ export class CloverPaymentInterface extends PaymentInterface {
             return false;
         }
         try {
-            const result = await this._rpc("clover_refund_payment", [String(line.transaction_id)]);
+            const result = await this._rpc("clover_refund_payment",
+                [String(line.transaction_id)]);
             if (result?.error) {
                 this._showError(result.error);
                 return false;
@@ -64,140 +103,261 @@ export class CloverPaymentInterface extends PaymentInterface {
 
     close() {
         this._cancelled = true;
+        this._disposeConnector();
     }
 
     // ------------------------------------------------------------------
-    // Card payment flow
+    // SDK Connection Management
     // ------------------------------------------------------------------
 
-    async _sendCardPaymentRequest(uuid) {
-        const order = this.pos.get_order();
-        const line = order.get_paymentline_by_uuid(uuid);
-
-        line.set_payment_status("waiting");
-
-        const amountCents = Math.round(line.amount * 100);
-
-        let result;
-        try {
-            result = await this._rpc("clover_create_payment", [amountCents, order.uid, "card"]);
-        } catch (e) {
-            const msg = e?.data?.message || e?.message || _t("Could not reach Clover. Check device/network.");
-            this._showError(msg);
-            line.set_payment_status("retry");
-            return false;
-        }
-
-        if (!result || result.error) {
-            this._showError(result?.error || _t("Clover payment failed."));
-            line.set_payment_status("retry");
-            return false;
-        }
-
-        line.transaction_id = result.clover_transaction_id;
-        line.set_payment_status("waitingCard");
-
-        return this._pollUntilResolved(line, result.clover_transaction_id);
+    async _fetchSdkConfig() {
+        return this._rpc("clover_get_sdk_config", []);
     }
 
-    // ------------------------------------------------------------------
-    // QR payment flow
-    // ------------------------------------------------------------------
+    _getConnector() {
+        return new Promise((resolve) => {
+            if (this._connector && this._connectorReady) {
+                resolve(this._connector);
+                return;
+            }
 
-    async _sendQRPaymentRequest(uuid) {
-        const order = this.pos.get_order();
-        const line = order.get_paymentline_by_uuid(uuid);
+            this._disposeConnector();
 
-        line.set_payment_status("waiting");
+            const sdk = window.clover;
+            if (!sdk) {
+                console.error("Clover SDK not loaded");
+                resolve(null);
+                return;
+            }
 
-        const amountCents = Math.round(line.amount * 100);
+            const cfg = this._sdkConfig;
 
-        let result;
-        try {
-            result = await this._rpc("clover_create_payment", [amountCents, order.uid, "qr"]);
-        } catch (e) {
-            const msg = e?.data?.message || e?.message || _t("Could not reach Clover. Check device/network.");
-            this._showError(msg);
-            line.set_payment_status("retry");
-            return false;
-        }
+            const cloudConfig = new sdk.WebSocketCloudCloverDeviceConfigurationBuilder(
+                cfg.applicationId,
+                cfg.deviceId,
+                cfg.merchantId,
+                cfg.accessToken,
+            )
+                .setCloverServer(cfg.cloverServer)
+                .setFriendlyId(cfg.friendlyId)
+                .build();
 
-        if (!result || result.error) {
-            this._showError(result?.error || _t("Clover QR payment failed."));
-            line.set_payment_status("retry");
-            return false;
-        }
+            const builderConfig = {};
+            builderConfig[sdk.CloverConnectorFactoryBuilder.FACTORY_VERSION] =
+                sdk.CloverConnectorFactoryBuilder.VERSION_12;
 
-        line.transaction_id = result.clover_transaction_id;
+            const factory = sdk.CloverConnectorFactoryBuilder
+                .createICloverConnectorFactory(builderConfig);
 
-        // Open QR dialog — it handles its own polling and resolves when done
-        const approved = await new Promise((resolve) => {
-            this.env.services.dialog.add(CloverQRScreen, {
-                transactionId: result.clover_transaction_id,
-                paymentMethodId: this.payment_method_id.id,
-                qrPayload: result.qr_payload || "",
-                amount: line.amount,
-                orderRef: order.uid,
-                onComplete: (ok) => resolve(ok),
-            });
+            const connector = factory.createICloverConnector(cloudConfig);
+
+            this._connectorReady = false;
+            let resolved = false;
+
+            const timeout = setTimeout(() => {
+                if (!resolved) {
+                    resolved = true;
+                    console.error("Clover SDK connection timeout");
+                    resolve(null);
+                }
+            }, CONNECT_TIMEOUT_MS);
+
+            const listener = Object.assign(
+                {},
+                sdk.remotepay.ICloverConnectorListener.prototype,
+                {
+                    onDeviceReady: () => {
+                        if (!resolved) {
+                            resolved = true;
+                            clearTimeout(timeout);
+                            this._connectorReady = true;
+                            this._connector = connector;
+                            resolve(connector);
+                        }
+                    },
+                    onDeviceDisconnected: () => {
+                        console.warn("Clover device disconnected");
+                        this._connectorReady = false;
+                        if (!resolved) {
+                            resolved = true;
+                            clearTimeout(timeout);
+                            resolve(null);
+                        }
+                    },
+                    onDeviceConnected: () => {
+                        console.log("Clover device connected, waiting for ready...");
+                    },
+                    onDeviceError: (deviceErrorEvent) => {
+                        console.error("Clover device error:", deviceErrorEvent);
+                    },
+                    onSaleResponse: (response) => {
+                        this._handleSaleResponse(response);
+                    },
+                    onRefundPaymentResponse: (response) => {
+                        this._handleRefundResponse(response);
+                    },
+                    onConfirmPaymentRequest: (request) => {
+                        // Auto-accept payment challenges (e.g. duplicate check)
+                        connector.acceptPayment(request.getPayment());
+                    },
+                    onVerifySignatureRequest: (request) => {
+                        // Auto-accept signature
+                        connector.acceptSignature(request);
+                    },
+                },
+            );
+
+            connector.addCloverConnectorListener(listener);
+            connector.initializeConnection();
         });
+    }
 
-        if (approved) {
-            line.set_payment_status("done");
-            return true;
+    _disposeConnector() {
+        if (this._connector) {
+            try {
+                this._connector.dispose();
+            } catch (_e) {
+                // ignore
+            }
+            this._connector = null;
+            this._connectorReady = false;
         }
-        line.set_payment_status("retry");
-        return false;
     }
 
     // ------------------------------------------------------------------
-    // Card polling loop
+    // Sale Execution
     // ------------------------------------------------------------------
 
-    async _pollUntilResolved(line, cloverTransactionId) {
-        const deadline = Date.now() + PAYMENT_TIMEOUT_MS;
+    _executeSale(connector, line, order, amountCents, paymentType) {
+        return new Promise((resolve) => {
+            const sdk = window.clover;
 
-        while (Date.now() < deadline) {
-            await this._sleep(POLL_INTERVAL_MS);
+            const saleRequest = new sdk.remotepay.SaleRequest();
+            saleRequest.setExternalId(sdk.CloverID.getNewId());
+            saleRequest.setAmount(amountCents);
 
-            // Cashier hit Cancel or left the payment screen
-            if (this._cancelled || line.payment_status === "retry") {
-                return false;
+            // Argentina regional extras
+            const extras = {};
+            extras["currency"] = "ARS";
+            saleRequest.setRegionalExtras(extras);
+
+            // Card entry methods
+            if (paymentType === "qr") {
+                // QR-only: disable card entry methods
+                saleRequest.setCardEntryMethods(0);
+            } else {
+                // Card: allow all entry methods
+                saleRequest.setCardEntryMethods(
+                    sdk.CardEntryMethods?.DEFAULT || 15,
+                );
             }
 
-            let status;
-            try {
-                status = await this._rpc("clover_get_payment_status", [cloverTransactionId]);
-            } catch (_e) {
-                continue; // network hiccup — keep polling
-            }
+            this._pendingLine = line;
+            this._pendingResolve = resolve;
+            this._pendingOrder = order;
+            this._pendingPaymentType = paymentType;
 
-            switch (status.state) {
-                case "approved":
-                    line.transaction_id = status.clover_payment_id || cloverTransactionId;
-                    line.card_type = status.card_type || "Clover";
-                    if (line.set_receipt_info) {
-                        line.set_receipt_info(
-                            status.card_type || "Card",
-                            status.card_last4 || "",
-                            false,
-                        );
-                    }
-                    line.set_payment_status("done");
-                    return true;
-                case "rejected":
-                case "canceled":
-                case "expired":
-                case "error":
+            line.set_payment_status("waitingCard");
+
+            // Hard timeout
+            this._paymentTimeout = setTimeout(() => {
+                if (this._pendingResolve) {
+                    this._pendingResolve(false);
+                    this._pendingResolve = null;
+                    this._pendingLine = null;
                     line.set_payment_status("retry");
-                    return false;
-                // "created" / "pending" → keep polling
-            }
-        }
+                    this._showError(_t("Payment timed out."));
+                }
+            }, PAYMENT_TIMEOUT_MS);
 
-        // 2-minute hard timeout
-        line.set_payment_status("retry");
-        return false;
+            connector.sale(saleRequest);
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // SDK Response Handlers
+    // ------------------------------------------------------------------
+
+    async _handleSaleResponse(response) {
+        clearTimeout(this._paymentTimeout);
+
+        const line = this._pendingLine;
+        const resolvePayment = this._pendingResolve;
+        const order = this._pendingOrder;
+        const paymentType = this._pendingPaymentType;
+        this._pendingLine = null;
+        this._pendingResolve = null;
+        this._pendingOrder = null;
+        this._pendingPaymentType = null;
+
+        if (!line || !resolvePayment) return;
+
+        const success = response.getSuccess();
+        const payment = response.getPayment();
+
+        if (success && payment) {
+            const cloverPaymentId = payment.getId() || "";
+            const cardTxn = payment.getCardTransaction?.() || {};
+            const cardType = cardTxn.getCardType?.() || "Card";
+            const cardLast4 = cardTxn.getLast4?.() || "";
+
+            line.transaction_id = cloverPaymentId;
+            line.card_type = cardType;
+            if (line.set_receipt_info) {
+                line.set_receipt_info(cardType, cardLast4, false);
+            }
+            line.set_payment_status("done");
+
+            // Log transaction to Odoo backend
+            try {
+                await this._rpc("clover_log_transaction", [
+                    order?.uid || "",
+                    paymentType || "card",
+                    payment.getAmount?.() || 0,
+                    cloverPaymentId,
+                    "approved",
+                    JSON.stringify(response),
+                    cardType,
+                    cardLast4,
+                    "",
+                ]);
+            } catch (_e) {
+                // non-fatal — payment already succeeded
+            }
+
+            resolvePayment(true);
+        } else {
+            const reason = response.getReason?.() || _t("Payment declined.");
+            line.set_payment_status("retry");
+            this._showError(reason);
+
+            // Log failed transaction
+            try {
+                await this._rpc("clover_log_transaction", [
+                    order?.uid || "",
+                    paymentType || "card",
+                    0,
+                    "",
+                    "rejected",
+                    JSON.stringify(response),
+                    "",
+                    "",
+                    reason,
+                ]);
+            } catch (_e) {
+                // non-fatal
+            }
+
+            resolvePayment(false);
+        }
+    }
+
+    _handleRefundResponse(response) {
+        if (response.getSuccess()) {
+            console.log("Clover refund successful");
+        } else {
+            console.warn("Clover refund failed:", response.getReason?.());
+        }
     }
 
     // ------------------------------------------------------------------
@@ -221,10 +381,6 @@ export class CloverPaymentInterface extends PaymentInterface {
             type: "danger",
             sticky: false,
         });
-    }
-
-    _sleep(ms) {
-        return new Promise((resolve) => setTimeout(resolve, ms));
     }
 }
 
