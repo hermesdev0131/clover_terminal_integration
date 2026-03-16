@@ -3,6 +3,7 @@
 import { PaymentInterface } from "@point_of_sale/app/payment/payment_interface";
 import { register_payment_method } from "@point_of_sale/app/store/pos_store";
 import { _t } from "@web/core/l10n/translation";
+import { CloverQRScreen } from "./clover_qr_screen";
 
 const CONNECT_TIMEOUT_MS = 30000;   // 30s to establish WebSocket
 const PAYMENT_TIMEOUT_MS = 120000;  // 2 min hard timeout for payment
@@ -13,9 +14,12 @@ export class CloverPaymentInterface extends PaymentInterface {
         super.setup(...args);
         this._cancelled = false;
         this._connector = null;
+        this._connectorReady = false;
         this._pendingResolve = null;
         this._pendingLine = null;
         this._sdkConfig = null;
+        this._qrDialogClose = null;
+        this._qrUpdateFn = null;
         this.enable_reversals();
     }
 
@@ -43,7 +47,7 @@ export class CloverPaymentInterface extends PaymentInterface {
                 return false;
             }
 
-            // 2. Connect to device via WebSocket
+            // 2. Connect to device via WebSocket (reuses existing connection)
             const connector = await this._getConnector();
             if (!connector) {
                 this._showError(_t("Could not connect to Clover device."));
@@ -55,9 +59,15 @@ export class CloverPaymentInterface extends PaymentInterface {
             const amountCents = Math.round(line.amount * 100);
             const paymentType = this._paymentType();
 
+            // For QR: open dialog on Odoo screen
+            if (paymentType === "qr") {
+                this._openQRDialog(line, order);
+            }
+
             return await this._executeSale(connector, line, order, amountCents, paymentType);
 
         } catch (e) {
+            this._closeQRDialog();
             const msg = e?.message || _t("Clover payment failed.");
             this._showError(msg);
             line.set_payment_status("retry");
@@ -67,7 +77,10 @@ export class CloverPaymentInterface extends PaymentInterface {
 
     async send_payment_cancel(order, uuid) {
         this._cancelled = true;
-        if (this._connector) {
+        this._closeQRDialog();
+
+        // Reset device to cancel payment — keep connector alive for reuse
+        if (this._connector && this._connectorReady) {
             try {
                 this._connector.resetDevice();
             } catch (_e) {
@@ -101,6 +114,7 @@ export class CloverPaymentInterface extends PaymentInterface {
 
     close() {
         this._cancelled = true;
+        this._closeQRDialog();
         this._disposeConnector();
     }
 
@@ -114,11 +128,13 @@ export class CloverPaymentInterface extends PaymentInterface {
 
     _getConnector() {
         return new Promise((resolve) => {
+            // Reuse existing healthy connection
             if (this._connector && this._connectorReady) {
                 resolve(this._connector);
                 return;
             }
 
+            // Dispose stale connector before creating new one
             this._disposeConnector();
 
             const sdk = window.clover;
@@ -138,7 +154,6 @@ export class CloverPaymentInterface extends PaymentInterface {
                 hasToken: !!cfg.accessToken,
             });
 
-            // SDK constructor: (applicationId, deviceId, merchantId, accessToken)
             const cloudConfig = new sdk.WebSocketCloudCloverDeviceConfigurationBuilder(
                 cfg.applicationId,
                 cfg.deviceId,
@@ -147,7 +162,6 @@ export class CloverPaymentInterface extends PaymentInterface {
             )
                 .setCloverServer(cfg.cloverServer)
                 .setFriendlyId(cfg.friendlyId)
-                .setForceConnect(true)
                 .build();
 
             const builderConfig = {};
@@ -175,6 +189,7 @@ export class CloverPaymentInterface extends PaymentInterface {
                 sdk.remotepay.ICloverConnectorListener.prototype,
                 {
                     onDeviceReady: () => {
+                        console.log("Clover device ready");
                         if (!resolved) {
                             resolved = true;
                             clearTimeout(timeout);
@@ -217,6 +232,9 @@ export class CloverPaymentInterface extends PaymentInterface {
                     },
                     onVerifySignatureRequest: (request) => {
                         connector.acceptSignature(request);
+                    },
+                    onDeviceActivityStart: (event) => {
+                        this._handleDeviceActivity(event);
                     },
                 },
             );
@@ -279,6 +297,7 @@ export class CloverPaymentInterface extends PaymentInterface {
             // Hard timeout
             this._paymentTimeout = setTimeout(() => {
                 if (this._pendingResolve) {
+                    this._closeQRDialog();
                     this._pendingResolve(false);
                     this._pendingResolve = null;
                     this._pendingLine = null;
@@ -307,6 +326,9 @@ export class CloverPaymentInterface extends PaymentInterface {
         this._pendingOrder = null;
         this._pendingPaymentType = null;
 
+        // Close QR dialog if open
+        this._closeQRDialog();
+
         const success = response.getSuccess();
         const payment = response.getPayment();
 
@@ -329,7 +351,6 @@ export class CloverPaymentInterface extends PaymentInterface {
                 } catch (_e) {
                     console.error("Auto-void failed:", _e);
                 }
-                // Log the voided transaction
                 this._logTransaction(order, paymentType, 0, cloverPaymentId,
                     "canceled", response, cardType, cardLast4,
                     "Auto-voided: user cancelled during payment");
@@ -346,7 +367,6 @@ export class CloverPaymentInterface extends PaymentInterface {
                 line.set_payment_status("done");
             }
 
-            // Log approved transaction
             this._logTransaction(order, paymentType,
                 payment.getAmount?.() || 0, cloverPaymentId,
                 "approved", response, cardType, cardLast4, "");
@@ -361,7 +381,6 @@ export class CloverPaymentInterface extends PaymentInterface {
             }
             this._showError(reason);
 
-            // Log rejected transaction
             this._logTransaction(order, paymentType, 0, "",
                 "rejected", response, "", "", reason);
 
@@ -375,6 +394,47 @@ export class CloverPaymentInterface extends PaymentInterface {
         } else {
             console.warn("Clover refund failed:", response.getReason?.());
         }
+    }
+
+    _handleDeviceActivity(event) {
+        const state = event.getEventState?.() || "";
+        const message = event.getMessage?.() || "";
+        console.log("Clover device activity:", state, message);
+
+        // If QR data is available, update the QR dialog
+        if (this._qrUpdateFn && this._pendingPaymentType === "qr") {
+            // Try to extract QR payload from the event message
+            if (message && (message.startsWith("http") || message.startsWith("data:"))) {
+                this._qrUpdateFn(message, "waiting");
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // QR Dialog Management
+    // ------------------------------------------------------------------
+
+    _openQRDialog(line, order) {
+        this._closeQRDialog();
+        this._qrDialogClose = this.env.services.dialog.add(CloverQRScreen, {
+            amount: line.amount,
+            orderRef: order.uid || "",
+            qrPayload: "",
+            onCancel: () => {
+                this.send_payment_cancel(order, line.uuid);
+            },
+            onUpdateReady: (updateFn) => {
+                this._qrUpdateFn = updateFn;
+            },
+        });
+    }
+
+    _closeQRDialog() {
+        if (this._qrDialogClose) {
+            this._qrDialogClose();
+            this._qrDialogClose = null;
+        }
+        this._qrUpdateFn = null;
     }
 
     // ------------------------------------------------------------------
@@ -402,7 +462,6 @@ export class CloverPaymentInterface extends PaymentInterface {
                 errorMsg || "",
             ]);
         } catch (_e) {
-            // non-fatal — don't break payment flow for logging
             console.warn("Failed to log Clover transaction:", _e);
         }
     }
