@@ -395,7 +395,10 @@ export class CloverPaymentInterface extends PaymentInterface {
         const amountCents = Math.round(line.amount * 100);
         console.log(`[Clover] Creating QR payment via REST: ${amountCents} cents`);
 
-        // 1. Create QR payment on backend → get checkout URL
+        // Release SDK WebSocket so device is free for Connect v1 REST
+        this._disposeConnector();
+
+        // 1. Create QR payment on backend (Connect v1 → device + checkout URL → Odoo)
         const result = await this._rpc("clover_create_qr_payment", [
             order.uid || "", amountCents,
         ]);

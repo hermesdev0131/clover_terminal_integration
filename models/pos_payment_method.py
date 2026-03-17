@@ -134,22 +134,26 @@ class PosPaymentMethod(models.Model):
         return {'success': True}
 
     def clover_create_qr_payment(self, order_uid, amount_cents):
-        """Create a Clover order and return a checkout URL for QR display.
+        """Create a Clover order, send QR to device via Connect v1,
+        and return a checkout URL for display on the Odoo screen.
 
-        Uses v3 REST only (no device connection needed).
-        The JS frontend generates a QR code from the checkout URL.
-        Returns {qr_url, clover_order_id} or {error}.
+        Returns {qr_payload, clover_payment_id, clover_order_id} or {error}.
         """
         self.ensure_one()
         terminal = self._get_clover_terminal()
         try:
             clover_order_id = terminal._payment_create_clover_order(
                 amount_cents, order_uid)
+            idem_key = f'{order_uid}_qr_{int(time.time())}'
+            # Send QR to device via Connect v1 (device shows QR on its screen)
+            clover_payment_id, device_qr = terminal._payment_send_qr(
+                clover_order_id, amount_cents, idem_key)
+            # Build checkout URL for Odoo screen QR display
             qr_url = terminal._get_checkout_url(clover_order_id)
             return {
                 'clover_order_id': clover_order_id,
-                'clover_payment_id': '',
-                'qr_payload': qr_url,
+                'clover_payment_id': clover_payment_id,
+                'qr_payload': device_qr or qr_url,
             }
         except Exception as exc:
             return {'error': str(exc)}
@@ -190,14 +194,11 @@ class PosPaymentMethod(models.Model):
             return {'state': 'error', 'error': str(exc)}
 
     def clover_cancel_qr_payment(self, clover_order_id):
-        """Cancel a pending QR payment by deleting the Clover order."""
+        """Cancel a pending QR payment by resetting the terminal."""
         self.ensure_one()
         terminal = self._get_clover_terminal()
         try:
-            terminal._api_request(
-                'DELETE',
-                f'/v3/merchants/{terminal.merchant_id}/orders/{clover_order_id}',
-            )
+            terminal._payment_cancel_on_terminal()
         except Exception:
             pass
         return {'success': True}
