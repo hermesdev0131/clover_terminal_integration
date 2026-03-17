@@ -374,6 +374,12 @@ export class CloverPaymentInterface extends PaymentInterface {
                     this._pendingResolve(false);
                     this._pendingResolve = null;
                     this._pendingLine = null;
+                    this._pendingSaleRequest = null;
+                    this._closeQRDialog();
+                    // Reset device to cancel old sale so its response won't interfere with retry
+                    if (this._connector && this._connectorReady) {
+                        this._connector.resetDevice();
+                    }
                     line.set_payment_status("retry");
                     this._showError(_t("Payment timed out."));
                 }
@@ -456,7 +462,12 @@ export class CloverPaymentInterface extends PaymentInterface {
                     this._pendingResolve(false);
                     this._pendingResolve = null;
                     this._pendingLine = null;
+                    this._pendingSaleRequest = null;
                     this._closeQRDialog();
+                    // Reset device to cancel old sale so its response won't interfere with retry
+                    if (this._connector && this._connectorReady) {
+                        this._connector.resetDevice();
+                    }
                     line.set_payment_status("retry");
                     this._showError(_t("QR payment timed out."));
                 }
@@ -621,7 +632,11 @@ export class CloverPaymentInterface extends PaymentInterface {
                     this._pendingResolve(false);
                     this._pendingResolve = null;
                     this._pendingLine = null;
+                    this._pendingSaleRequest = null;
                     this._closeQRDialog();
+                    if (this._connector && this._connectorReady) {
+                        this._connector.resetDevice();
+                    }
                     this._showError(_t("Payment timed out."));
                 }
             }, PAYMENT_TIMEOUT_MS);
