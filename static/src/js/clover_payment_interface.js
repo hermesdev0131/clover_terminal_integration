@@ -171,6 +171,13 @@ export class CloverPaymentInterface extends PaymentInterface {
         this._disposeConnector();
     }
 
+    _stopQRPolling() {
+        if (this._qrPollTimer) {
+            clearInterval(this._qrPollTimer);
+            this._qrPollTimer = null;
+        }
+    }
+
     // ------------------------------------------------------------------
     // SDK Connection Management
     // ------------------------------------------------------------------
