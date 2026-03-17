@@ -621,6 +621,7 @@ export class CloverPaymentInterface extends PaymentInterface {
                     this._pendingResolve(false);
                     this._pendingResolve = null;
                     this._pendingLine = null;
+                    this._closeQRDialog();
                     this._showError(_t("Payment timed out."));
                 }
             }, PAYMENT_TIMEOUT_MS);
