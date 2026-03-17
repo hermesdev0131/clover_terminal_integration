@@ -134,26 +134,20 @@ class PosPaymentMethod(models.Model):
         return {'success': True}
 
     def clover_create_qr_payment(self, order_uid, amount_cents):
-        """Create a Clover order, send QR to device via Connect v1,
-        and return a checkout URL for display on the Odoo screen.
+        """Create a Clover order and return checkout URL for QR display.
 
-        Returns {qr_payload, clover_payment_id, clover_order_id} or {error}.
+        Device QR is handled by the JS SDK (SaleRequest + presentQrcOnly).
+        Returns {qr_url, clover_order_id} or {error}.
         """
         self.ensure_one()
         terminal = self._get_clover_terminal()
         try:
             clover_order_id = terminal._payment_create_clover_order(
                 amount_cents, order_uid)
-            idem_key = f'{order_uid}_qr_{int(time.time())}'
-            # Send QR to device via Connect v1 (device shows QR on its screen)
-            clover_payment_id, device_qr = terminal._payment_send_qr(
-                clover_order_id, amount_cents, idem_key)
-            # Build checkout URL for Odoo screen QR display
             qr_url = terminal._get_checkout_url(clover_order_id)
             return {
                 'clover_order_id': clover_order_id,
-                'clover_payment_id': clover_payment_id,
-                'qr_payload': device_qr or qr_url,
+                'qr_url': qr_url,
             }
         except Exception as exc:
             return {'error': str(exc)}

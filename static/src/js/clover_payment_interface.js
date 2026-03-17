@@ -388,107 +388,85 @@ export class CloverPaymentInterface extends PaymentInterface {
     }
 
     // ------------------------------------------------------------------
-    // QR Payment (REST API + polling)
+    // QR Payment (SDK WebSocket for device + checkout URL for Odoo)
     // ------------------------------------------------------------------
 
     async _executeQRPayment(line, order) {
         const amountCents = Math.round(line.amount * 100);
-        console.log(`[Clover] Creating QR payment via REST: ${amountCents} cents`);
+        console.log(`[Clover] QR payment: ${amountCents} cents`);
 
-        // Release SDK WebSocket so device is free for Connect v1 REST
-        this._disposeConnector();
-
-        // 1. Create QR payment on backend (Connect v1 → device + checkout URL → Odoo)
+        // 1. Create Clover order via backend → get checkout URL for Odoo screen
         const result = await this._rpc("clover_create_qr_payment", [
             order.uid || "", amountCents,
         ]);
-
         if (result.error) {
             this._showError(result.error);
             line.set_payment_status("retry");
             return false;
         }
-
-        const { clover_order_id, clover_payment_id, qr_payload } = result;
+        const { clover_order_id, qr_url } = result;
         this._qrOrderId = clover_order_id;
-        console.log("[Clover] QR payment created:", { clover_order_id, clover_payment_id, qr_payload: qr_payload ? "yes" : "no" });
+        console.log("[Clover] QR order created:", { clover_order_id, qr_url });
 
-        // 2. Open QR dialog with the actual QR payload
-        this._openQRDialog(line, order, qr_payload);
-        line.set_payment_status("waiting");
+        // 2. Show checkout URL QR on Odoo screen
+        this._openQRDialog(line, order, qr_url);
 
-        // 3. Poll for payment completion
+        // 3. Connect SDK and send QR-only sale to device
+        if (!this._sdkConfig) {
+            this._sdkConfig = await this._fetchSdkConfig();
+        }
+        if (this._sdkConfig.error) {
+            this._closeQRDialog();
+            this._showError(this._sdkConfig.error);
+            line.set_payment_status("retry");
+            return false;
+        }
+        const connector = await this._getConnector();
+        if (!connector) {
+            this._closeQRDialog();
+            this._showError(_t("Could not connect to Clover device."));
+            line.set_payment_status("retry");
+            return false;
+        }
+
+        // 4. Send SaleRequest with QR-only mode → device shows QR on its screen
+        const sdk = window.clover;
+        const saleRequest = new sdk.remotepay.SaleRequest();
+        saleRequest.setExternalId(sdk.CloverID.getNewId());
+        saleRequest.setAmount(amountCents);
+        saleRequest.setCardEntryMethods(0);
+        saleRequest.setAllowOfflinePayment(false);
+        saleRequest.setApproveOfflinePaymentWithoutPrompt(false);
+
+        // Regional extras
+        const extras = {};
+        extras["currency"] = "ARS";
+        saleRequest.setRegionalExtras(extras);
+
+        // onSaleResponse handles completion (same flow as card)
         return new Promise((resolve) => {
-            const startTime = Date.now();
+            this._pendingLine = line;
+            this._pendingResolve = resolve;
+            this._pendingOrder = order;
+            this._pendingPaymentType = "qr";
+            line.set_payment_status("waiting");
 
-            this._qrPollTimer = setInterval(async () => {
-                if (this._cancelled) {
-                    this._stopQRPolling();
-                    this._closeQRDialog();
-                    resolve(false);
-                    return;
-                }
-
-                // Hard timeout
-                if (Date.now() - startTime > PAYMENT_TIMEOUT_MS) {
-                    this._stopQRPolling();
+            this._paymentTimeout = setTimeout(() => {
+                if (this._pendingResolve) {
+                    this._pendingResolve(false);
+                    this._pendingResolve = null;
+                    this._pendingLine = null;
                     this._closeQRDialog();
                     line.set_payment_status("retry");
                     this._showError(_t("QR payment timed out."));
-                    this._logTransaction(order, "qr", 0, clover_payment_id,
-                        "expired", "", "", "", "Timeout");
-                    resolve(false);
-                    return;
                 }
+            }, PAYMENT_TIMEOUT_MS);
 
-                try {
-                    const status = await this._rpc("clover_poll_qr_payment", [
-                        clover_order_id, clover_payment_id,
-                    ]);
-                    console.log("[Clover] QR poll:", status.state);
-
-                    if (status.state === "approved") {
-                        this._stopQRPolling();
-                        this._closeQRDialog();
-                        line.transaction_id = status.clover_payment_id || clover_payment_id;
-                        line.card_type = status.card_type || "QR";
-                        if (line.set_receipt_info) {
-                            line.set_receipt_info(status.card_type || "QR", status.card_last4 || "", false);
-                        }
-                        line.set_payment_status("done");
-                        this._logTransaction(order, "qr", amountCents,
-                            status.clover_payment_id || clover_payment_id,
-                            "approved", "", status.card_type || "", status.card_last4 || "", "");
-                        resolve(true);
-                    } else if (status.state === "rejected" || status.state === "canceled") {
-                        this._stopQRPolling();
-                        this._closeQRDialog();
-                        line.set_payment_status("retry");
-                        this._showError(status.error || _t("QR payment was declined."));
-                        this._logTransaction(order, "qr", 0, clover_payment_id,
-                            status.state, "", "", "", status.error || "");
-                        resolve(false);
-                    } else if (status.state === "error") {
-                        this._stopQRPolling();
-                        this._closeQRDialog();
-                        line.set_payment_status("retry");
-                        this._showError(status.error || _t("QR payment error."));
-                        resolve(false);
-                    }
-                    // "pending" → keep polling
-                } catch (_e) {
-                    console.warn("[Clover] QR poll error:", _e);
-                    // Keep polling on transient errors
-                }
-            }, QR_POLL_INTERVAL_MS);
+            this._pendingSaleRequest = saleRequest;
+            this._retryCount = 0;
+            console.log("[Clover] Sending QR-only sale request to device...");
+            connector.sale(saleRequest);
         });
-    }
-
-    _stopQRPolling() {
-        if (this._qrPollTimer) {
-            clearInterval(this._qrPollTimer);
-            this._qrPollTimer = null;
-        }
     }
 
     // ------------------------------------------------------------------
