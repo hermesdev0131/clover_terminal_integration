@@ -530,6 +530,16 @@ class CloverTerminal(models.Model):
         )
         return clover_order_id
 
+    def _get_checkout_url(self, clover_order_id):
+        """Build a Clover online checkout URL for the given order.
+
+        Customer scans this URL as a QR code and pays via Clover's web checkout.
+        No device connection needed.
+        """
+        self.ensure_one()
+        web_base = CLOVER_ENV[self.environment]['web_base']
+        return f'{web_base}/checkout/{self.merchant_id}/{clover_order_id}'
+
     def _payment_send_card(self, clover_order_id, amount_cents, idempotency_key):
         """Send a SALE request to the terminal via Connect v1.
 

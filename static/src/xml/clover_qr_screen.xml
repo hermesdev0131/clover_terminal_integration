@@ -15,17 +15,12 @@
 
                 <!-- QR code display -->
                 <div class="d-flex justify-content-center mb-4">
-                    <!-- URL / data-URI → display as image -->
-                    <img t-if="hasQrPayload and isQrUrl"
-                         t-att-src="props.qrPayload"
-                         alt="QR Code"
-                         class="border rounded p-2 bg-white"
-                         style="width:260px;height:260px;object-fit:contain;"/>
-                    <!-- Raw code string → show it -->
-                    <div t-elif="hasQrPayload"
-                         class="border rounded p-3 bg-white d-flex align-items-center justify-content-center"
-                         style="width:260px;height:260px;word-break:break-all;font-size:0.7rem;">
-                        <span class="text-muted" t-esc="props.qrPayload"/>
+                    <!-- QR code rendered dynamically -->
+                    <div t-if="hasQrPayload"
+                         t-ref="qrContainer"
+                         class="d-flex align-items-center justify-content-center"
+                         style="width:260px;height:260px;">
+                        <i class="fa fa-spinner fa-spin fa-2x text-muted"/>
                     </div>
                     <!-- No QR payload — show scan-on-terminal message -->
                     <div t-else=""

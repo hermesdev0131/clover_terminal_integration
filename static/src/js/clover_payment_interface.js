@@ -26,6 +26,7 @@ export class CloverPaymentInterface extends PaymentInterface {
         this._preResetPending = false;
         this._qrPollTimer = null;
         this._qrOrderId = null;
+        this._pendingRefundResolve = null;
         this.enable_reversals();
     }
 
@@ -123,14 +124,41 @@ export class CloverPaymentInterface extends PaymentInterface {
             return false;
         }
         try {
-            const result = await this._rpc("clover_refund_payment",
-                [String(line.transaction_id)]);
-            if (result?.error) {
-                this._showError(result.error);
+            // Use SDK WebSocket for refund (REST v3 not available on LATAM)
+            if (!this._sdkConfig) {
+                this._sdkConfig = await this._fetchSdkConfig();
+            }
+            if (this._sdkConfig.error) {
+                this._showError(this._sdkConfig.error);
                 return false;
             }
-            return true;
+            const connector = await this._getConnector();
+            if (!connector) {
+                this._showError(_t("Could not connect to Clover device for refund."));
+                return false;
+            }
+            const sdk = window.clover;
+            const refundRequest = new sdk.remotepay.RefundPaymentRequest();
+            refundRequest.setPaymentId(String(line.transaction_id));
+            refundRequest.setFullRefund(true);
+            const amountCents = Math.round(line.amount * 100);
+            refundRequest.setAmount(amountCents);
+
+            return new Promise((resolve) => {
+                this._pendingRefundResolve = resolve;
+                connector.refundPayment(refundRequest);
+
+                // Timeout for refund
+                setTimeout(() => {
+                    if (this._pendingRefundResolve) {
+                        this._pendingRefundResolve(false);
+                        this._pendingRefundResolve = null;
+                        this._showError(_t("Refund timed out."));
+                    }
+                }, PAYMENT_TIMEOUT_MS);
+            });
         } catch (_e) {
+            console.error("[Clover] Refund exception:", _e);
             this._showError(_t("Could not process refund. Check connection."));
             return false;
         }
@@ -367,10 +395,7 @@ export class CloverPaymentInterface extends PaymentInterface {
         const amountCents = Math.round(line.amount * 100);
         console.log(`[Clover] Creating QR payment via REST: ${amountCents} cents`);
 
-        // Release SDK WebSocket so device is free for Connect v1 REST
-        this._disposeConnector();
-
-        // 1. Create QR payment on backend → get QR code data
+        // 1. Create QR payment on backend → get checkout URL
         const result = await this._rpc("clover_create_qr_payment", [
             order.uid || "", amountCents,
         ]);
@@ -588,10 +613,17 @@ export class CloverPaymentInterface extends PaymentInterface {
     }
 
     _handleRefundResponse(response) {
-        if (response.getSuccess()) {
-            console.log("Clover refund successful");
-        } else {
-            console.warn("Clover refund failed:", response.getReason?.());
+        const success = response.getSuccess();
+        console.log("[Clover] Refund response:", { success, reason: response.getReason?.() });
+        if (this._pendingRefundResolve) {
+            const resolve = this._pendingRefundResolve;
+            this._pendingRefundResolve = null;
+            if (success) {
+                resolve(true);
+            } else {
+                this._showError(response.getReason?.() || _t("Refund was declined."));
+                resolve(false);
+            }
         }
     }
 
