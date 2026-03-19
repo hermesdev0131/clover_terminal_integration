@@ -23,6 +23,8 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
+ROADMAP.md
+
 # Environment
 .env
 *.log

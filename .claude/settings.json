@@ -25,7 +25,13 @@
       "Read(//usr/**)",
       "Bash(grep \"\\\\.py$\")",
       "Read(//var/**)",
-      "Bash(find ~ -name *.xml -path */point_of_sale/*)"
+      "Bash(find ~ -name *.xml -path */point_of_sale/*)",
+      "Read(//opt/odoo18/odoo/addons/**)",
+      "Read(//opt/**)",
+      "Bash(find /opt/odoo18/ -name *.po -path */es_AR/* -exec grep -l 'Reference must be unique' {})",
+      "Bash(2)",
+      "Bash(grep -r 'unique per company' /opt/odoo18/ --include=*.py)",
+      "Bash(find /opt/odoo18/ -name *.py -exec grep -l \"unique.*company\\\\|Reference must be unique\" {})"
     ],
     "additionalDirectories": [
       "/tmp/package/dist/bundle"

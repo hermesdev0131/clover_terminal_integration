@@ -615,6 +615,7 @@ export class CloverPaymentInterface extends PaymentInterface {
 
         // Reset Odoo hard timeout while device is still active
         if (this._pendingResolve && this._pendingLine) {
+            const line = this._pendingLine;
             clearTimeout(this._paymentTimeout);
             this._paymentTimeout = setTimeout(() => {
                 if (this._pendingResolve) {
@@ -622,6 +623,7 @@ export class CloverPaymentInterface extends PaymentInterface {
                     this._pendingResolve = null;
                     this._pendingLine = null;
                     this._closeQRDialog();
+                    line.set_payment_status("retry");
                     this._showError(_t("Payment timed out."));
                 }
             }, PAYMENT_TIMEOUT_MS);
