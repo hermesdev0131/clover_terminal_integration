@@ -68,6 +68,7 @@ export class CloverPaymentInterface extends PaymentInterface {
                 connectorReady: this._connectorReady,
             });
             const connector = await this._getConnector();
+            if (this._cancelled) return false;
             if (!connector) {
                 this._showError(_t("Could not connect to Clover device."));
                 line.set_payment_status("retry");
@@ -104,13 +105,15 @@ export class CloverPaymentInterface extends PaymentInterface {
             this._qrOrderId = null;
         }
 
-        // Card cancel via SDK — reset device, keep connector alive
+        // Cancel SDK — reset device if connected, dispose if still connecting
         if (this._connector && this._connectorReady) {
             try {
                 this._connector.resetDevice();
             } catch (_e) {
                 // best-effort
             }
+        } else if (!this._connectorReady) {
+            this._disposeConnector();
         }
 
         // Resolve pending promise so Odoo doesn't stay stuck
@@ -242,13 +245,14 @@ export class CloverPaymentInterface extends PaymentInterface {
             this._connectorReady = false;
             let resolved = false;
 
-            const timeout = setTimeout(() => {
+            this._connectTimeout = setTimeout(() => {
                 if (!resolved) {
                     resolved = true;
                     console.error("Clover SDK connection timeout");
                     resolve(null);
                 }
             }, CONNECT_TIMEOUT_MS);
+            const timeout = this._connectTimeout;
 
             const listener = Object.assign(
                 {},
@@ -341,6 +345,10 @@ export class CloverPaymentInterface extends PaymentInterface {
     }
 
     _disposeConnector() {
+        if (this._connectTimeout) {
+            clearTimeout(this._connectTimeout);
+            this._connectTimeout = null;
+        }
         if (this._connector) {
             try {
                 this._connector.dispose();
@@ -434,6 +442,7 @@ export class CloverPaymentInterface extends PaymentInterface {
             return false;
         }
         const connector = await this._getConnector();
+        if (this._cancelled) return false;
         if (!connector) {
             this._closeQRDialog();
             this._showError(_t("Could not connect to Clover device."));
