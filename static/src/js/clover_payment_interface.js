@@ -205,6 +205,9 @@ export class CloverPaymentInterface extends PaymentInterface {
             // Dispose stale connector before creating new one
             this._disposeConnector();
 
+            // Store resolve so _disposeConnector can abort this promise
+            this._connectResolve = resolve;
+
             const sdk = window.clover;
             if (!sdk) {
                 console.error("Clover SDK not loaded");
@@ -248,6 +251,7 @@ export class CloverPaymentInterface extends PaymentInterface {
             this._connectTimeout = setTimeout(() => {
                 if (!resolved) {
                     resolved = true;
+                    this._connectResolve = null;
                     console.error("Clover SDK connection timeout");
                     resolve(null);
                 }
@@ -315,6 +319,7 @@ export class CloverPaymentInterface extends PaymentInterface {
                             this._connectorReady = true;
                             if (!resolved) {
                                 resolved = true;
+                                this._connectResolve = null;
                                 clearTimeout(timeout);
                                 console.log("[Clover] Device ready after pre-reset");
                                 resolve(connector);
@@ -348,6 +353,11 @@ export class CloverPaymentInterface extends PaymentInterface {
         if (this._connectTimeout) {
             clearTimeout(this._connectTimeout);
             this._connectTimeout = null;
+        }
+        // Resolve orphaned _getConnector promise
+        if (this._connectResolve) {
+            this._connectResolve(null);
+            this._connectResolve = null;
         }
         if (this._connector) {
             try {
@@ -657,18 +667,27 @@ export class CloverPaymentInterface extends PaymentInterface {
 
     _openQRDialog(line, order, qrPayload = "") {
         this._closeQRDialog();
+        this._qrDialogClosedByCode = false;
+        const doCancel = () => {
+            this.send_payment_cancel(order, line.uuid);
+        };
         this._qrDialogClose = this.env.services.dialog.add(CloverQRScreen, {
             amount: line.amount,
             orderRef: order.uid || "",
             qrPayload: qrPayload,
-            onCancel: () => {
-                this.send_payment_cancel(order, line.uuid);
+            onCancel: doCancel,
+        }, {
+            onClose: () => {
+                if (!this._qrDialogClosedByCode) {
+                    doCancel();
+                }
             },
         });
     }
 
     _closeQRDialog() {
         if (this._qrDialogClose) {
+            this._qrDialogClosedByCode = true;
             this._qrDialogClose();
             this._qrDialogClose = null;
         }
