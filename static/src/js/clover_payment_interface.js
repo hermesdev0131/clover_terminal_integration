@@ -23,7 +23,6 @@ export class CloverPaymentInterface extends PaymentInterface {
         this._qrDialogClose = null;
         this._pendingSaleRequest = null;
         this._retryCount = 0;
-        this._preResetPending = false;
         this._qrPollTimer = null;
         this._qrOrderId = null;
         this._pendingRefundResolve = null;
@@ -265,13 +264,12 @@ export class CloverPaymentInterface extends PaymentInterface {
                     onDeviceReady: () => {
                         console.log("[Clover] Device ready");
                         this._connector = connector;
+                        this._connectorReady = true;
                         if (!resolved) {
-                            // Pre-reset on first connection to clear any leftover state
-                            console.log("[Clover] Sending pre-reset to clear device state...");
-                            this._preResetPending = true;
-                            connector.resetDevice();
-                        } else {
-                            this._connectorReady = true;
+                            resolved = true;
+                            this._connectResolve = null;
+                            clearTimeout(timeout);
+                            resolve(connector);
                         }
                     },
                     onDeviceDisconnected: () => {
@@ -312,20 +310,6 @@ export class CloverPaymentInterface extends PaymentInterface {
                     },
                     onResetDeviceResponse: () => {
                         console.log("[Clover] Device reset acknowledged");
-
-                        // Pre-reset on initial connection — now device is clean
-                        if (this._preResetPending) {
-                            this._preResetPending = false;
-                            this._connectorReady = true;
-                            if (!resolved) {
-                                resolved = true;
-                                this._connectResolve = null;
-                                clearTimeout(timeout);
-                                console.log("[Clover] Device ready after pre-reset");
-                                resolve(connector);
-                            }
-                            return;
-                        }
 
                         // Retry sale after SECURE_PAY reset (with delay for device to settle)
                         if (this._retryCount > 0 && this._pendingSaleRequest && this._connector) {
