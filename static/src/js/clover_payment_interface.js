@@ -112,8 +112,20 @@ export class CloverPaymentInterface extends PaymentInterface {
                 // best-effort
             }
         }
-        // Don't resolve pending — let onSaleResponse handle it
-        // If payment already completed, onSaleResponse will auto-void
+
+        // Resolve pending promise so Odoo doesn't stay stuck
+        if (this._pendingResolve) {
+            const line = this._pendingLine;
+            this._pendingResolve(false);
+            this._pendingResolve = null;
+            this._pendingLine = null;
+            this._pendingOrder = null;
+            this._pendingPaymentType = null;
+            clearTimeout(this._paymentTimeout);
+            if (line) {
+                line.set_payment_status("retry");
+            }
+        }
         return super.send_payment_cancel(order, uuid);
     }
 
@@ -650,6 +662,13 @@ export class CloverPaymentInterface extends PaymentInterface {
         if (this._qrDialogClose) {
             this._qrDialogClose();
             this._qrDialogClose = null;
+        }
+    }
+
+    _stopQRPolling() {
+        if (this._qrPollTimer) {
+            clearInterval(this._qrPollTimer);
+            this._qrPollTimer = null;
         }
     }
 
