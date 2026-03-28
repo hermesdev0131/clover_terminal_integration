@@ -134,20 +134,24 @@ class PosPaymentMethod(models.Model):
         return {'success': True}
 
     def clover_create_qr_payment(self, order_uid, amount_cents):
-        """Create a Clover order and return checkout URL for QR display.
+        """Create a Clover order and return QR data for display.
 
-        Device QR is handled by the JS SDK (SaleRequest + presentQrcOnly).
-        Returns {qr_url, clover_order_id} or {error}.
+        For LATAM: generates an EMVCo Transferencias 3.0 QR from the
+        stored device template (if configured).
+        Device QR is also handled by the JS SDK (SaleRequest + presentQrcOnly).
+        Returns {qr_data, clover_order_id} or {error}.
         """
         self.ensure_one()
         terminal = self._get_clover_terminal()
         try:
             clover_order_id = terminal._payment_create_clover_order(
                 amount_cents, order_uid)
-            qr_url = terminal._get_checkout_url(clover_order_id)
+            # Try EMVCo QR generation (LATAM interoperable QR)
+            amount = amount_cents / 100.0
+            qr_data = terminal._generate_emvco_qr(amount, clover_order_id)
             return {
                 'clover_order_id': clover_order_id,
-                'qr_url': qr_url,
+                'qr_data': qr_data,
             }
         except Exception as exc:
             return {'error': str(exc)}
@@ -186,19 +190,6 @@ class PosPaymentMethod(models.Model):
             return {'state': 'pending', 'clover_payment_id': clover_payment_id}
         except Exception as exc:
             return {'state': 'error', 'error': str(exc)}
-
-    def clover_get_order_qr_data(self, clover_order_id):
-        """Fetch full order details to check for QR-related data.
-
-        Returns the raw order dict for investigation / QR payload extraction.
-        """
-        self.ensure_one()
-        terminal = self._get_clover_terminal()
-        try:
-            order_data = terminal._payment_get_order_qr_data(clover_order_id)
-            return {'order_data': order_data}
-        except Exception as exc:
-            return {'error': str(exc)}
 
     def clover_cancel_qr_payment(self, clover_order_id):
         """Cancel a pending QR payment by resetting the terminal."""

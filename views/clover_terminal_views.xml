@@ -88,6 +88,10 @@
                             <field name="last_error" readonly="1"/>
                         </group>
                     </group>
+                    <group string="QR Payment (Transferencias 3.0)"
+                           invisible="environment != 'production_la'">
+                        <field name="qr_template" widget="text"
+                               placeholder="Scan the QR on the Clover device with a plain QR reader app and paste the raw text here"/></group>
                 </sheet>
                 <chatter/>
             </form>

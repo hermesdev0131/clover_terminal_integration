@@ -7,6 +7,8 @@ import requests
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError
 
+from . import emvco_qr
+
 _logger = logging.getLogger(__name__)
 
 # Clover environment URLs (regional)
@@ -134,6 +136,12 @@ class CloverTerminal(models.Model):
     last_error = fields.Text(string='Last Error', readonly=True)
     merchant_name = fields.Char(string='Merchant Name', readonly=True)
     device_model = fields.Char(string='Device Model', readonly=True)
+    qr_template = fields.Text(
+        string='QR Template (EMVCo)',
+        help='Raw EMVCo QR data from the Clover device. '
+             'Scan the device QR with a plain QR reader and paste the text here. '
+             'Used to generate interoperable QR codes on the Odoo POS screen.',
+    )
 
     # Reverse relation to payment methods
     payment_method_ids = fields.One2many(
@@ -148,6 +156,14 @@ class CloverTerminal(models.Model):
         ('unique_device', 'unique(merchant_id, device_serial, company_id)',
          'This device is already registered for this merchant.'),
     ]
+
+    @api.constrains('qr_template')
+    def _check_qr_template(self):
+        for rec in self:
+            if rec.qr_template:
+                valid, msg = emvco_qr.validate_template(rec.qr_template.strip())
+                if not valid:
+                    raise UserError(_('Invalid QR template: %s') % msg)
 
     def init(self):
         """Clean up partial index from previous version if it exists."""
@@ -535,10 +551,31 @@ class CloverTerminal(models.Model):
 
         Customer scans this URL as a QR code and pays via Clover's web checkout.
         No device connection needed.
+        NOTE: Does NOT work for LATAM — hosted checkout returns 404.
         """
         self.ensure_one()
         web_base = CLOVER_ENV[self.environment]['web_base']
         return f'{web_base}/checkout/{self.merchant_id}/{clover_order_id}'
+
+    def _generate_emvco_qr(self, amount, reference):
+        """Generate an EMVCo Transferencias 3.0 QR code for the given amount.
+
+        Uses the stored QR template from the device to build a dynamic QR
+        with the correct merchant data, amount, and reference.
+
+        Args:
+            amount: payment amount as float (e.g. 15.00)
+            reference: unique reference string (e.g. Clover order ID)
+
+        Returns:
+            Raw EMVCo QR string, or empty string if no template configured.
+        """
+        self.ensure_one()
+        if not self.qr_template:
+            return ''
+        template = self.qr_template.strip()
+        amount_str = f'{amount:.2f}'
+        return emvco_qr.generate_payment_qr(template, amount_str, reference)
 
     def _payment_send_card(self, clover_order_id, amount_cents, idempotency_key):
         """Send a SALE request to the terminal via Connect v1.
@@ -608,18 +645,6 @@ class CloverTerminal(models.Model):
             f'/v3/merchants/{self.merchant_id}/orders/{clover_order_id}/payments',
         )
         return result.get('elements', [])
-
-    def _payment_get_order_qr_data(self, clover_order_id):
-        """Fetch full order details from REST v3 to check for QR-related fields.
-
-        Returns the raw order dict so the caller can inspect all fields.
-        """
-        self.ensure_one()
-        return self._api_request(
-            'GET',
-            f'/v3/merchants/{self.merchant_id}/orders/{clover_order_id}'
-            '?expand=payments,lineItems',
-        )
 
     def _payment_refund(self, clover_payment_id, amount_cents=None):
         """Refund a completed Clover payment via REST v3.
