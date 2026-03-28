@@ -7,7 +7,7 @@ import { CloverQRScreen } from "./clover_qr_screen";
 
 const CONNECT_TIMEOUT_MS = 30000;   // 30s to establish WebSocket
 const PAYMENT_TIMEOUT_MS = 120000;  // 2 min hard timeout for payment
-const QR_POLL_INTERVAL_MS = 3000;   // 3s between QR status polls
+const QR_POLL_INTERVAL_MS = 3000;   // 3s between QR status polls (reserved for future use)
 const RESET_RETRY_DELAY_MS = 3000;  // 3s wait after reset before retry
 
 export class CloverPaymentInterface extends PaymentInterface {
@@ -409,7 +409,7 @@ export class CloverPaymentInterface extends PaymentInterface {
         const amountCents = Math.round(line.amount * 100);
         console.log(`[Clover] QR payment: ${amountCents} cents`);
 
-        // 1. Create Clover order via backend → get checkout URL for Odoo screen
+        // 1. Create Clover order via backend (for tracking/reconciliation)
         const result = await this._rpc("clover_create_qr_payment", [
             order.uid || "", amountCents,
         ]);
@@ -418,14 +418,16 @@ export class CloverPaymentInterface extends PaymentInterface {
             line.set_payment_status("retry");
             return false;
         }
-        const { clover_order_id, qr_url } = result;
+        const { clover_order_id } = result;
         this._qrOrderId = clover_order_id;
-        console.log("[Clover] QR order created:", { clover_order_id, qr_url });
+        console.log("[Clover] QR order created:", clover_order_id);
 
-        // 2. Show checkout URL QR on Odoo screen
-        this._openQRDialog(line, order, qr_url);
+        // 2. Show QR dialog — starts with "scan on terminal" message.
+        //    If the SDK provides the EMVCo QR data via onDeviceActivityStart,
+        //    the dialog will be updated to show the QR on Odoo's screen too.
+        this._openQRDialog(line, order, "");
 
-        // 3. Connect SDK and send QR-only sale to device
+        // 3. Connect SDK
         if (!this._sdkConfig) {
             this._sdkConfig = await this._fetchSdkConfig();
         }
@@ -444,14 +446,23 @@ export class CloverPaymentInterface extends PaymentInterface {
             return false;
         }
 
-        // 4. Send SaleRequest with QR-only mode → device shows QR on its screen
+        // 4. Send SaleRequest with presentQrcOnly — device shows QR on its screen
         const sdk = window.clover;
         const saleRequest = new sdk.remotepay.SaleRequest();
         saleRequest.setExternalId(sdk.CloverID.getNewId());
         saleRequest.setAmount(amountCents);
-        saleRequest.setCardEntryMethods(0);
         saleRequest.setAllowOfflinePayment(false);
         saleRequest.setApproveOfflinePaymentWithoutPrompt(false);
+
+        // Use the proper SDK API for QR-only mode
+        if (typeof saleRequest.setPresentQrcOnly === "function") {
+            saleRequest.setPresentQrcOnly(true);
+            console.log("[Clover] Using setPresentQrcOnly(true)");
+        } else {
+            // Fallback: disable all card entry methods → QR only
+            saleRequest.setCardEntryMethods(0);
+            console.log("[Clover] Fallback: setCardEntryMethods(0)");
+        }
 
         // Regional extras
         const extras = {};
@@ -479,9 +490,34 @@ export class CloverPaymentInterface extends PaymentInterface {
 
             this._pendingSaleRequest = saleRequest;
             this._retryCount = 0;
-            console.log("[Clover] Sending QR-only sale request to device...");
+            console.log("[Clover] Sending QR-only sale request to device (presentQrcOnly)...");
             connector.sale(saleRequest);
+
+            // After device receives the sale request, poll REST v3 order
+            // to check if Clover exposes QR data there
+            this._pollOrderForQRData(clover_order_id);
         });
+    }
+
+    async _pollOrderForQRData(cloverOrderId) {
+        // Wait a few seconds for the device to generate the QR
+        await new Promise((r) => setTimeout(r, 4000));
+        if (this._cancelled || !this._pendingResolve) return;
+
+        try {
+            const result = await this._rpc("clover_get_order_qr_data", [cloverOrderId]);
+            console.log("[Clover] ═══ REST v3 ORDER DATA (QR investigation) ═══");
+            console.log("[Clover] Full order data:", JSON.stringify(result, null, 2));
+
+            if (result.order_data) {
+                // Log every key at top level
+                for (const [key, val] of Object.entries(result.order_data)) {
+                    console.log(`[Clover] order.${key}:`, val);
+                }
+            }
+        } catch (e) {
+            console.warn("[Clover] Could not fetch order QR data:", e);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -624,9 +660,60 @@ export class CloverPaymentInterface extends PaymentInterface {
     }
 
     _handleDeviceActivity(event) {
-        const state = event.getEventState?.() || "";
-        const message = event.getMessage?.() || "";
-        console.log("Clover device activity:", state, message);
+        const state = String(event.getEventState?.() || "");
+        const message = String(event.getMessage?.() || "");
+        console.log("[Clover] Device activity:", state, message);
+
+        // ── QR mode investigation: capture all event data ──
+        if (state.includes("QR") || state.includes("qr") ||
+            state === "START_QR_CODE_MODE" || state === "STOP_QR_CODE_MODE") {
+            console.log("[Clover] ═══ QR MODE EVENT ═══");
+            console.log("[Clover] QR state:", state);
+            console.log("[Clover] QR message:", message);
+            console.log("[Clover] QR message length:", message.length);
+
+            // Enumerate all event properties
+            try {
+                const keys = Object.keys(event);
+                console.log("[Clover] QR event keys:", keys);
+                for (const key of keys) {
+                    try {
+                        console.log(`[Clover] QR event.${key}:`, event[key]);
+                    } catch (_e) { /* skip */ }
+                }
+            } catch (_e) { /* skip */ }
+
+            // Probe known and speculative getter methods for QR data
+            const probes = [
+                "getMessage", "getEventState", "getCode", "getInputOptions",
+                "getQrCode", "getQrPaymentCode", "getQr", "getPayload",
+                "getData", "getContent", "getUri", "getUrl", "getQrcodeData",
+                "getQrCodeData", "getQrData", "getToken",
+            ];
+            for (const fn of probes) {
+                if (typeof event[fn] === "function") {
+                    try {
+                        const val = event[fn]();
+                        if (val !== undefined && val !== null && val !== "") {
+                            console.log(`[Clover] QR event.${fn}():`, val);
+                        }
+                    } catch (_e) { /* skip */ }
+                }
+            }
+
+            // Full JSON dump
+            try {
+                console.log("[Clover] QR event JSON:", JSON.stringify(event));
+            } catch (_e) {
+                console.log("[Clover] QR event not serializable");
+            }
+
+            // If message looks like EMVCo data (starts with 0002), use it as QR payload
+            if (message && message.length > 50 && message.startsWith("0002")) {
+                console.log("[Clover] ★ EMVCo QR payload found in message! Updating dialog...");
+                this._updateQRPayload(message);
+            }
+        }
 
         // Reset Odoo hard timeout while device is still active
         if (this._pendingResolve && this._pendingLine) {
@@ -675,6 +762,13 @@ export class CloverPaymentInterface extends PaymentInterface {
             this._qrDialogClose();
             this._qrDialogClose = null;
         }
+    }
+
+    _updateQRPayload(qrPayload) {
+        // Reopen the QR dialog with the actual QR data from the device
+        if (!this._pendingLine || !this._pendingOrder) return;
+        console.log("[Clover] Updating QR dialog with device payload");
+        this._openQRDialog(this._pendingLine, this._pendingOrder, qrPayload);
     }
 
     _stopQRPolling() {

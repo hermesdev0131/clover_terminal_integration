@@ -187,6 +187,19 @@ class PosPaymentMethod(models.Model):
         except Exception as exc:
             return {'state': 'error', 'error': str(exc)}
 
+    def clover_get_order_qr_data(self, clover_order_id):
+        """Fetch full order details to check for QR-related data.
+
+        Returns the raw order dict for investigation / QR payload extraction.
+        """
+        self.ensure_one()
+        terminal = self._get_clover_terminal()
+        try:
+            order_data = terminal._payment_get_order_qr_data(clover_order_id)
+            return {'order_data': order_data}
+        except Exception as exc:
+            return {'error': str(exc)}
+
     def clover_cancel_qr_payment(self, clover_order_id):
         """Cancel a pending QR payment by resetting the terminal."""
         self.ensure_one()

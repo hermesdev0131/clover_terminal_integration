@@ -28,3 +28,7 @@ ROADMAP.md
 # Environment
 .env
 *.log
+
+# Guide
+doc/
+screenshot/

@@ -32,7 +32,23 @@
       "Bash(2)",
       "Bash(grep -r 'unique per company' /opt/odoo18/ --include=*.py)",
       "Bash(find /opt/odoo18/ -name *.py -exec grep -l \"unique.*company\\\\|Reference must be unique\" {})",
-      "Bash(grep -r \"onClose\\\\|on-close\\\\|beforeClose\" /home/hermes/ -path */web/static/src/core/dialog/*)"
+      "Bash(grep -r \"onClose\\\\|on-close\\\\|beforeClose\" /home/hermes/ -path */web/static/src/core/dialog/*)",
+      "WebFetch(domain:docs.apis-fiserv.com)",
+      "Read(//tmp/**)",
+      "WebFetch(domain:clover.github.io)",
+      "WebFetch(domain:www.fiserv.com.ar)",
+      "WebFetch(domain:ar.clover.com)",
+      "Bash(perl -pe 's/\\([,;:{}\\\\[\\\\]]\\)/\\\\n$1\\\\n/g')",
+      "Bash(perl -pe 's/function\\\\s+/FUNCDEF___/g; s/\\([,;:{}\\\\[\\\\]]\\)/\\\\n$1\\\\n/g')",
+      "Bash(grep -i -B5 -A30 function.*cloverdeviceevent)",
+      "Bash(perl -pe 's/\\\\],function\\\\\\(t,e,i\\\\\\)/\\\\n\\\\n===NEWMOD===\\\\n]/g')",
+      "Bash(perl -pe 's/,\"\"\"\"/\\\\n\"\"\"\"/g')",
+      "Bash(perl -ne 'if \\(/:\\(\"\"\"\":\"\"\"\"|null|\\\\d+|true|false|{|}|\\\\[\\)/\\) {print}')",
+      "Bash(tr '{' '\\\\n')",
+      "Bash(tr '}' '\\\\n')",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git reset:*)"
     ],
     "additionalDirectories": [
       "/tmp/package/dist/bundle"

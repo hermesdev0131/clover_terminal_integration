@@ -609,6 +609,18 @@ class CloverTerminal(models.Model):
         )
         return result.get('elements', [])
 
+    def _payment_get_order_qr_data(self, clover_order_id):
+        """Fetch full order details from REST v3 to check for QR-related fields.
+
+        Returns the raw order dict so the caller can inspect all fields.
+        """
+        self.ensure_one()
+        return self._api_request(
+            'GET',
+            f'/v3/merchants/{self.merchant_id}/orders/{clover_order_id}'
+            '?expand=payments,lineItems',
+        )
+
     def _payment_refund(self, clover_payment_id, amount_cents=None):
         """Refund a completed Clover payment via REST v3.
 
