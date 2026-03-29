@@ -7,6 +7,11 @@ The QR contains structured TLV (Tag-Length-Value) data following the
 EMVCo Merchant-Presented QR specification.
 """
 
+from datetime import datetime, timezone, timedelta
+
+# Argentina timezone (UTC-3)
+_ART = timezone(timedelta(hours=-3))
+
 def _crc16_ccitt(data):
     """Calculate CRC-16/CCITT-FALSE checksum (EMVCo standard)."""
     crc = 0xFFFF
@@ -44,9 +49,10 @@ def parse_emvco(raw):
         if len(value) < length:
             break
 
-        # Compound tags (Merchant Account Info 02-51, Additional Data 62)
+        # Compound tags (Merchant Account Info 02-51, Additional Data 62,
+        # Language 64, Unreserved Templates 80-99)
         tag_num = int(tag)
-        if (2 <= tag_num <= 51) or tag in ('62', '64'):
+        if (2 <= tag_num <= 51) or tag in ('62', '64') or (80 <= tag_num <= 99):
             sub = {}
             spos = 0
             while spos + 4 <= len(value):
@@ -100,6 +106,27 @@ def build_emvco(parsed, amount=None, reference=None):
         for stag in sorted(subs.keys()):
             tag62_val += _tlv(stag, subs[stag])
         tags['62'] = {'_raw': tag62_val, '_sub': subs}
+
+    # Update timestamp in Tag 80 (Fiserv custom data, sub-tag 03)
+    # Format: YYMMDDHHmmSS in Argentina time (UTC-3)
+    existing_80 = tags.get('80')
+    if isinstance(existing_80, dict) and '03' in existing_80.get('_sub', {}):
+        now = datetime.now(_ART)
+        timestamp = now.strftime('%y%m%d%H%M%S')
+        subs_80 = dict(existing_80.get('_sub', {}))
+        subs_80['03'] = timestamp
+        tag80_val = ''
+        for stag in sorted(subs_80.keys()):
+            tag80_val += _tlv(stag, subs_80[stag])
+        tags['80'] = {'_raw': tag80_val, '_sub': subs_80}
+    elif isinstance(existing_80, str):
+        # Tag 80 wasn't parsed as compound — try to find and replace
+        # the 12-char timestamp pattern (sub-tag 03, len 12)
+        now = datetime.now(_ART)
+        timestamp = now.strftime('%y%m%d%H%M%S')
+        idx = existing_80.find('0312')
+        if idx >= 0:
+            tags['80'] = existing_80[:idx + 4] + timestamp + existing_80[idx + 16:]
 
     # Build QR string in tag order (00 first, 63 last)
     # Standard tag order: 00, 01, 02-51, 52, 53, 54, 55-58, 59, 60, 61, 62, 64, 63
