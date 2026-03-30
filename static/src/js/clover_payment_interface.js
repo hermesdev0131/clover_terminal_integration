@@ -426,49 +426,10 @@ export class CloverPaymentInterface extends PaymentInterface {
         // 2. Show QR dialog — with EMVCo QR if available, otherwise "scan on terminal"
         this._openQRDialog(line, order, qr_data || "");
 
-        // 3. Connect SDK
-        if (!this._sdkConfig) {
-            this._sdkConfig = await this._fetchSdkConfig();
-        }
-        if (this._sdkConfig.error) {
-            this._closeQRDialog();
-            this._showError(this._sdkConfig.error);
-            line.set_payment_status("retry");
-            return false;
-        }
-        const connector = await this._getConnector();
-        if (this._cancelled) return false;
-        if (!connector) {
-            this._closeQRDialog();
-            this._showError(_t("Could not connect to Clover device."));
-            line.set_payment_status("retry");
-            return false;
-        }
+        // 3. Try to connect SDK and send to device (non-blocking — don't fail if offline)
+        this._sendQRToDevice(amountCents);
 
-        // 4. Send SaleRequest with presentQrcOnly — device shows QR on its screen
-        const sdk = window.clover;
-        const saleRequest = new sdk.remotepay.SaleRequest();
-        saleRequest.setExternalId(sdk.CloverID.getNewId());
-        saleRequest.setAmount(amountCents);
-        saleRequest.setAllowOfflinePayment(false);
-        saleRequest.setApproveOfflinePaymentWithoutPrompt(false);
-
-        // Use the proper SDK API for QR-only mode
-        if (typeof saleRequest.setPresentQrcOnly === "function") {
-            saleRequest.setPresentQrcOnly(true);
-            console.log("[Clover] Using setPresentQrcOnly(true)");
-        } else {
-            // Fallback: disable all card entry methods → QR only
-            saleRequest.setCardEntryMethods(0);
-            console.log("[Clover] Fallback: setCardEntryMethods(0)");
-        }
-
-        // Regional extras
-        const extras = {};
-        extras["currency"] = "ARS";
-        saleRequest.setRegionalExtras(extras);
-
-        // onSaleResponse handles completion (same flow as card)
+        // 4. Set up dual detection: SDK onSaleResponse + REST v3 polling
         return new Promise((resolve) => {
             this._pendingLine = line;
             this._pendingResolve = resolve;
@@ -476,21 +437,158 @@ export class CloverPaymentInterface extends PaymentInterface {
             this._pendingPaymentType = "qr";
             line.set_payment_status("waiting");
 
+            // Hard timeout — show manual confirm instead of failing
             this._paymentTimeout = setTimeout(() => {
+                this._stopQRPolling();
                 if (this._pendingResolve) {
-                    this._pendingResolve(false);
-                    this._pendingResolve = null;
-                    this._pendingLine = null;
-                    this._closeQRDialog();
-                    line.set_payment_status("retry");
-                    this._showError(_t("QR payment timed out."));
+                    console.log("[Clover] QR payment timeout — showing manual confirm");
+                    this._showManualConfirmDialog(line, order, clover_order_id);
                 }
             }, PAYMENT_TIMEOUT_MS);
 
+            // Start REST v3 polling to detect payment from Odoo QR scan
+            this._startQRPolling(clover_order_id, line, order);
+        });
+    }
+
+    async _sendQRToDevice(amountCents) {
+        // Best-effort: send SaleRequest to device for QR display
+        try {
+            if (!this._sdkConfig) {
+                this._sdkConfig = await this._fetchSdkConfig();
+            }
+            if (this._sdkConfig.error) {
+                console.warn("[Clover] SDK config error, device QR skipped:", this._sdkConfig.error);
+                return;
+            }
+            const connector = await this._getConnector();
+            if (this._cancelled || !connector) {
+                console.warn("[Clover] Device not available, Odoo QR only");
+                return;
+            }
+
+            const sdk = window.clover;
+            const saleRequest = new sdk.remotepay.SaleRequest();
+            saleRequest.setExternalId(sdk.CloverID.getNewId());
+            saleRequest.setAmount(amountCents);
+            saleRequest.setAllowOfflinePayment(false);
+            saleRequest.setApproveOfflinePaymentWithoutPrompt(false);
+
+            if (typeof saleRequest.setPresentQrcOnly === "function") {
+                saleRequest.setPresentQrcOnly(true);
+                console.log("[Clover] Using setPresentQrcOnly(true)");
+            } else {
+                saleRequest.setCardEntryMethods(0);
+                console.log("[Clover] Fallback: setCardEntryMethods(0)");
+            }
+
+            const extras = {};
+            extras["currency"] = "ARS";
+            saleRequest.setRegionalExtras(extras);
+
             this._pendingSaleRequest = saleRequest;
             this._retryCount = 0;
-            console.log("[Clover] Sending QR-only sale request to device (presentQrcOnly)...");
+            console.log("[Clover] Sending QR-only sale request to device...");
             connector.sale(saleRequest);
+        } catch (e) {
+            console.warn("[Clover] Device QR failed, Odoo QR only:", e);
+        }
+    }
+
+    _startQRPolling(cloverOrderId, line, order) {
+        this._qrPollPaymentId = "";
+        this._qrPollTimer = setInterval(async () => {
+            if (this._cancelled || !this._pendingResolve) {
+                this._stopQRPolling();
+                return;
+            }
+            try {
+                const result = await this._rpc("clover_poll_qr_payment", [
+                    cloverOrderId, this._qrPollPaymentId || "",
+                ]);
+                console.log("[Clover] QR poll:", result.state);
+
+                if (result.state === "approved") {
+                    this._stopQRPolling();
+                    clearTimeout(this._paymentTimeout);
+                    console.log("[Clover] QR payment detected via polling!");
+
+                    const resolvePayment = this._pendingResolve;
+                    this._pendingLine = null;
+                    this._pendingResolve = null;
+                    this._pendingOrder = null;
+                    this._pendingPaymentType = null;
+
+                    this._closeQRDialog();
+
+                    line.transaction_id = result.clover_payment_id || "";
+                    line.card_type = result.card_type || "QR";
+                    if (line.set_receipt_info) {
+                        line.set_receipt_info(result.card_type || "QR", result.card_last4 || "", false);
+                    }
+                    line.set_payment_status("done");
+
+                    this._logTransaction(order, "qr",
+                        line.amount * 100, result.clover_payment_id || "",
+                        "approved", result, result.card_type || "QR",
+                        result.card_last4 || "", "Detected via REST polling");
+
+                    if (resolvePayment) resolvePayment(true);
+                }
+            } catch (e) {
+                console.warn("[Clover] QR poll error:", e);
+            }
+        }, QR_POLL_INTERVAL_MS);
+    }
+
+    _showManualConfirmDialog(line, order, cloverOrderId) {
+        // Replace QR dialog with manual confirmation option
+        this._closeQRDialog();
+        this._qrDialogClosedByCode = false;
+
+        const doConfirm = () => {
+            this._qrDialogClosedByCode = true;
+            if (this._qrDialogClose) {
+                this._qrDialogClose();
+                this._qrDialogClose = null;
+            }
+            clearTimeout(this._paymentTimeout);
+
+            const resolvePayment = this._pendingResolve;
+            this._pendingLine = null;
+            this._pendingResolve = null;
+            this._pendingOrder = null;
+            this._pendingPaymentType = null;
+
+            line.transaction_id = `manual-qr-${cloverOrderId}`;
+            line.card_type = "QR";
+            line.set_payment_status("done");
+
+            this._logTransaction(order, "qr",
+                line.amount * 100, `manual-qr-${cloverOrderId}`,
+                "approved", {}, "QR", "",
+                "Manually confirmed by cashier");
+
+            if (resolvePayment) resolvePayment(true);
+        };
+
+        const doCancel = () => {
+            this.send_payment_cancel(order, line.uuid);
+        };
+
+        this._qrDialogClose = this.env.services.dialog.add(CloverQRScreen, {
+            amount: line.amount,
+            orderRef: order.uid || "",
+            qrPayload: "",
+            manualConfirm: true,
+            onConfirm: doConfirm,
+            onCancel: doCancel,
+        }, {
+            onClose: () => {
+                if (!this._qrDialogClosedByCode) {
+                    doCancel();
+                }
+            },
         });
     }
 

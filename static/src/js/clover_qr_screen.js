@@ -10,6 +10,8 @@ export class CloverQRScreen extends Component {
         amount: Number,
         orderRef: String,
         qrPayload: { type: String, optional: true },
+        manualConfirm: { type: Boolean, optional: true },
+        onConfirm: { type: Function, optional: true },
         onCancel: Function,
         close: Function,
     };
@@ -27,6 +29,16 @@ export class CloverQRScreen extends Component {
         return !!this.props.qrPayload;
     }
 
+    get isManualConfirm() {
+        return !!this.props.manualConfirm;
+    }
+
+    confirm() {
+        if (this.props.onConfirm) {
+            this.props.onConfirm();
+        }
+    }
+
     cancel() {
         this.props.onCancel();
     }
@@ -35,8 +47,6 @@ export class CloverQRScreen extends Component {
         const container = this.qrContainer.el;
         if (!container || !this.props.qrPayload) return;
 
-        // Use a simple canvas-based QR generator (no external dependencies)
-        // Encode the URL into a QR code via an img tag pointing to a QR API
         const payload = encodeURIComponent(this.props.qrPayload);
         const img = document.createElement("img");
         img.src = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${payload}`;
