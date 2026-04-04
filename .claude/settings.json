@@ -48,7 +48,10 @@
       "Bash(tr '}' '\\\\n')",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "WebFetch(domain:docs.latam-payments.depay.us)",
+      "WebFetch(domain:developer.fiserv.com)",
+      "WebFetch(domain:pagosconqr.fiservargentina.com)"
     ],
     "additionalDirectories": [
       "/tmp/package/dist/bundle"

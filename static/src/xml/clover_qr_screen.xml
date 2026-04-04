@@ -13,18 +13,8 @@
                 </p>
                 <h3 class="fw-bold mb-4">$ <t t-esc="amountFormatted"/></h3>
 
-                <!-- Manual confirmation mode -->
-                <div t-if="isManualConfirm" class="mb-4">
-                    <div class="border rounded d-flex align-items-center justify-content-center flex-column p-4"
-                         style="background-color:#fff3e0;">
-                        <i class="fa fa-exclamation-triangle fa-3x mb-3" style="color:#e65100;"/>
-                        <p class="fw-bold mb-1" style="color:#212529;">Tiempo de espera agotado</p>
-                        <p class="small mb-3" style="color:#6c757d;">Verifique con el cliente si el pago fue realizado</p>
-                    </div>
-                </div>
-
-                <!-- QR code display (not shown in manual confirm mode) -->
-                <div t-if="!isManualConfirm" class="d-flex justify-content-center mb-4">
+                <!-- QR code display -->
+                <div class="d-flex justify-content-center mb-4">
                     <!-- QR code rendered dynamically -->
                     <div t-if="hasQrPayload"
                          t-ref="qrContainer"
@@ -43,7 +33,7 @@
                 </div>
 
                 <!-- Status -->
-                <div t-if="!isManualConfirm" class="mb-2">
+                <div class="mb-2">
                     <span class="badge bg-warning text-dark px-3 py-2 fs-6">
                         <i class="fa fa-spinner fa-spin me-2"/>
                         Esperando pago...
@@ -53,12 +43,6 @@
             </div>
 
             <t t-set-slot="footer">
-                <button t-if="isManualConfirm"
-                        class="btn btn-success me-2"
-                        t-on-click="confirm">
-                    <i class="fa fa-check me-1"/>
-                    Confirmar Pago
-                </button>
                 <button class="btn btn-secondary"
                         t-on-click="cancel">
                     Cancelar

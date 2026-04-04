@@ -10,8 +10,6 @@ export class CloverQRScreen extends Component {
         amount: Number,
         orderRef: String,
         qrPayload: { type: String, optional: true },
-        manualConfirm: { type: Boolean, optional: true },
-        onConfirm: { type: Function, optional: true },
         onCancel: Function,
         close: Function,
     };
@@ -27,16 +25,6 @@ export class CloverQRScreen extends Component {
 
     get hasQrPayload() {
         return !!this.props.qrPayload;
-    }
-
-    get isManualConfirm() {
-        return !!this.props.manualConfirm;
-    }
-
-    confirm() {
-        if (this.props.onConfirm) {
-            this.props.onConfirm();
-        }
     }
 
     cancel() {
