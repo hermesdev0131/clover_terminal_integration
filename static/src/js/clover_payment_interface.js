@@ -8,6 +8,8 @@ import { CloverQRScreen } from "./clover_qr_screen";
 const CONNECT_TIMEOUT_MS = 30000;   // 30s to establish WebSocket
 const PAYMENT_TIMEOUT_MS = 120000;  // 2 min hard timeout for payment
 const RESET_RETRY_DELAY_MS = 3000;  // 3s wait after reset before retry
+const FISERV_POLL_INTERVAL_MS = 3000;   // poll Fiserv order status every 3s
+const FISERV_PAYMENT_TIMEOUT_MS = 300000;  // 5 min for QR scan + pay
 
 export class CloverPaymentInterface extends PaymentInterface {
 
@@ -25,6 +27,9 @@ export class CloverPaymentInterface extends PaymentInterface {
         this._qrPollTimer = null;
         this._qrOrderId = null;
         this._pendingRefundResolve = null;
+        this._fiservOrderUuid = null;
+        this._fiservReference = null;
+        this._fiservPollTimer = null;
         this.enable_reversals();
     }
 
@@ -44,6 +49,11 @@ export class CloverPaymentInterface extends PaymentInterface {
         console.log(`[Clover] === Payment request: ${paymentType}, amount: ${line.amount}, uuid: ${uuid} ===`);
 
         try {
+            // Fiserv QR: QR shown on Odoo screen, no device involved
+            if (paymentType === "fiserv_qr") {
+                return await this._executeFiservQRPayment(line, order);
+            }
+
             // QR payments use REST API (returns QR code data for display)
             if (paymentType === "qr") {
                 return await this._executeQRPayment(line, order);
@@ -92,6 +102,20 @@ export class CloverPaymentInterface extends PaymentInterface {
         this._cancelled = true;
         this._closeQRDialog();
         this._stopQRPolling();
+        this._stopFiservPolling();
+
+        // Fiserv QR cancel via REST API
+        if (this._fiservOrderUuid) {
+            try {
+                await this._rpc("fiserv_cancel_qr_payment", [
+                    this._fiservOrderUuid, this._fiservReference || "",
+                ]);
+            } catch (_e) {
+                // best-effort
+            }
+            this._fiservOrderUuid = null;
+            this._fiservReference = null;
+        }
 
         // QR cancel via REST API
         if (this._qrOrderId) {
@@ -136,6 +160,19 @@ export class CloverPaymentInterface extends PaymentInterface {
         if (!line?.transaction_id) {
             return false;
         }
+
+        // Fiserv QR refund goes through the REST API, not the SDK
+        if (this._paymentType() === "fiserv_qr") {
+            const result = await this._rpc("fiserv_refund_qr_payment", [
+                String(line.transaction_id), line.amount, "POS refund",
+            ]);
+            if (result.error) {
+                this._showError(result.error);
+                return false;
+            }
+            return true;
+        }
+
         try {
             // Use SDK WebSocket for refund (REST v3 not available on LATAM)
             if (!this._sdkConfig) {
@@ -181,6 +218,7 @@ export class CloverPaymentInterface extends PaymentInterface {
         this._cancelled = true;
         this._closeQRDialog();
         this._stopQRPolling();
+        this._stopFiservPolling();
         this._disposeConnector();
     }
 
@@ -498,6 +536,99 @@ export class CloverPaymentInterface extends PaymentInterface {
             console.log("[Clover] Sending QR-only sale request to device...");
             connector.sale(saleRequest);
         });
+    }
+
+    // ------------------------------------------------------------------
+    // Fiserv QR Payment (QR on Odoo screen, polling for confirmation)
+    // ------------------------------------------------------------------
+
+    async _executeFiservQRPayment(line, order) {
+        console.log(`[Fiserv] QR payment: ${line.amount} ARS`);
+
+        // 1. Create payment order + get static QR string
+        const result = await this._rpc("fiserv_create_qr_payment", [
+            order.uid || "", line.amount,
+        ]);
+        if (result.error) {
+            this._showError(result.error);
+            line.set_payment_status("retry");
+            return false;
+        }
+        const { qr_string, order_uuid, reference } = result;
+        this._fiservOrderUuid = order_uuid;
+        this._fiservReference = reference;
+        console.log("[Fiserv] Order created:", order_uuid);
+
+        // 2. Display the QR on the Odoo screen
+        this._openQRDialog(line, order, qr_string);
+        line.set_payment_status("waiting");
+
+        // 3. Poll for payment confirmation (recursive setTimeout — no overlap)
+        return new Promise((resolve) => {
+            this._pendingLine = line;
+            this._pendingResolve = resolve;
+            this._pendingOrder = order;
+            this._pendingPaymentType = "fiserv_qr";
+
+            const deadline = Date.now() + FISERV_PAYMENT_TIMEOUT_MS;
+
+            const pollOnce = async () => {
+                if (this._cancelled) {
+                    return;
+                }
+                if (Date.now() > deadline) {
+                    this._closeQRDialog();
+                    this._showError(_t("QR payment timed out."));
+                    this._finishFiserv(false, line, "expired");
+                    return;
+                }
+                let poll;
+                try {
+                    poll = await this._rpc("fiserv_poll_qr_payment", [order_uuid]);
+                } catch (_e) {
+                    poll = { state: "error" }; // transient — keep polling
+                }
+                if (this._cancelled) {
+                    return;
+                }
+                console.log("[Fiserv] Poll:", poll.state);
+                if (poll.state === "approved") {
+                    this._closeQRDialog();
+                    line.transaction_id = order_uuid;
+                    line.set_payment_status("done");
+                    this._logTransaction(order, "qr", Math.round(line.amount * 100),
+                        order_uuid, "approved", poll, "QR", "", "");
+                    this._finishFiserv(true, line, "approved");
+                } else if (["rejected", "expired", "canceled"].includes(poll.state)) {
+                    this._closeQRDialog();
+                    line.set_payment_status("retry");
+                    this._showError(_t("QR payment %s.", poll.state));
+                    this._finishFiserv(false, line, poll.state);
+                } else {
+                    // 'pending' / 'error' → schedule next poll
+                    this._fiservPollTimer = setTimeout(pollOnce, FISERV_POLL_INTERVAL_MS);
+                }
+            };
+            this._fiservPollTimer = setTimeout(pollOnce, FISERV_POLL_INTERVAL_MS);
+        });
+    }
+
+    _finishFiserv(success, line, _state) {
+        const resolve = this._pendingResolve;
+        this._pendingResolve = null;
+        this._pendingLine = null;
+        this._pendingOrder = null;
+        this._pendingPaymentType = null;
+        this._fiservOrderUuid = null;
+        this._fiservReference = null;
+        if (resolve) resolve(success);
+    }
+
+    _stopFiservPolling() {
+        if (this._fiservPollTimer) {
+            clearTimeout(this._fiservPollTimer);
+            this._fiservPollTimer = null;
+        }
     }
 
     // ------------------------------------------------------------------

@@ -114,3 +114,70 @@ class CloverOAuthController(http.Controller):
             '<p><a href="/odoo">Back to Odoo</a></p>'
             '</body></html>'
         )
+
+
+class FiservQRWebhookController(http.Controller):
+    """Receive Fiserv QR payment notifications.
+
+    The POS frontend drives the UI via polling; this webhook updates the
+    backend clover.transaction record for audit and reconciliation, and
+    serves as a fallback confirmation channel.
+    """
+
+    @http.route('/odoo/fiserv/qr/webhook', type='http', auth='public',
+                methods=['POST'], website=False, csrf=False)
+    def fiserv_qr_webhook(self, **kw):
+        """Fiserv POSTs payment notifications here.
+
+        Body contains the payment order UUID and status. We match it to a
+        pending clover.transaction and update its state.
+        """
+        # Optional source IP allowlist. Set the system parameter
+        # 'clover_terminal_integration.fiserv_webhook_ips' to a comma-separated
+        # list of Fiserv's public IPs (they provide these). If unset, all
+        # sources are accepted (so the integration works before IPs are known).
+        allowed = request.env['ir.config_parameter'].sudo().get_param(
+            'clover_terminal_integration.fiserv_webhook_ips', '')
+        if allowed.strip():
+            allowed_ips = {ip.strip() for ip in allowed.split(',') if ip.strip()}
+            remote_ip = request.httprequest.remote_addr
+            if remote_ip not in allowed_ips:
+                _logger.warning(
+                    'Fiserv webhook rejected from unlisted IP: %s', remote_ip)
+                return request.make_json_response({'received': False}, status=403)
+
+        try:
+            raw = request.httprequest.get_data(as_text=True)
+            data = json.loads(raw) if raw else {}
+        except (ValueError, TypeError):
+            _logger.warning('Fiserv webhook: invalid JSON body')
+            return request.make_json_response({'received': False}, status=400)
+
+        order_uuid = (
+            data.get('uuid')
+            or data.get('paymentOrderUUID')
+            or data.get('id')
+            or ''
+        )
+        _logger.info('Fiserv QR webhook received: %s', json.dumps(data, default=str))
+
+        if not order_uuid:
+            return request.make_json_response({'received': True})
+
+        tx = request.env['clover.transaction'].sudo().search(
+            [('clover_payment_id', '=', order_uuid)], limit=1)
+        if tx:
+            # Map Fiserv status to our state when present
+            status = data.get('status')
+            status_id = status.get('id') if isinstance(status, dict) else status
+            state_map = {
+                'P': 'approved', 'D': 'approved', 'A': 'pending',
+                'E': 'expired', 'R': 'rejected', 'C': 'canceled', 'V': 'canceled',
+            }
+            new_state = state_map.get(status_id, 'approved')
+            tx.write({
+                'state': new_state,
+                'raw_response_payload': json.dumps(data, default=str),
+            })
+
+        return request.make_json_response({'received': True})

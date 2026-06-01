@@ -92,6 +92,26 @@
                            invisible="environment != 'production_la'">
                         <field name="qr_template" widget="text"
                                placeholder="Scan the QR on the Clover device with a plain QR reader app and paste the raw text here"/></group>
+                    <group string="Fiserv QR Estático API (QR on Odoo screen)">
+                        <group>
+                            <field name="fiserv_qr_environment"/>
+                            <field name="fiserv_qr_token" password="True"
+                                   placeholder="JWT token from integraciones_qr@fiserv.com"/>
+                            <field name="fiserv_sucursal_id"
+                                   placeholder="e.g. 36419"/>
+                            <field name="fiserv_caja_id"
+                                   placeholder="e.g. 54137"/>
+                        </group>
+                        <group>
+                            <button name="action_fiserv_fetch_qr"
+                                    type="object"
+                                    string="Fetch Static QR"
+                                    class="btn-primary"
+                                    invisible="not fiserv_caja_id"/>
+                            <field name="fiserv_qr_string" readonly="1"
+                                   invisible="not fiserv_qr_string"/>
+                        </group>
+                    </group>
                 </sheet>
                 <chatter/>
             </form>

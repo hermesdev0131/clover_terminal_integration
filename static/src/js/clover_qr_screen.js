@@ -35,9 +35,11 @@ export class CloverQRScreen extends Component {
         const container = this.qrContainer.el;
         if (!container || !this.props.qrPayload) return;
 
+        // Render via Odoo's own barcode controller — no external service,
+        // works offline-from-internet as long as the Odoo server is reachable.
         const payload = encodeURIComponent(this.props.qrPayload);
         const img = document.createElement("img");
-        img.src = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${payload}`;
+        img.src = `/report/barcode/?barcode_type=QR&value=${payload}&width=480&height=480`;
         img.alt = "QR Code";
         img.style.width = "240px";
         img.style.height = "240px";

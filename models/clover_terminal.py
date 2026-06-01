@@ -143,6 +143,43 @@ class CloverTerminal(models.Model):
              'Used to generate interoperable QR codes on the Odoo POS screen.',
     )
 
+    # ------------------------------------------------------------------
+    # Fiserv QR Estático API (Transferencias 3.0, Argentina)
+    # Separate Yacare-backed REST API that exposes a static EMVCo QR per
+    # caja plus per-transaction payment orders. Unlike the Clover device
+    # SDK, this lets us display the QR on the Odoo POS screen.
+    # ------------------------------------------------------------------
+
+    fiserv_qr_token = fields.Char(
+        string='Fiserv QR Token',
+        groups='point_of_sale.group_pos_manager',
+        help='JWT token issued by Fiserv for the QR Estático API '
+             '(request from integraciones_qr@fiserv.com).',
+    )
+    fiserv_qr_environment = fields.Selection(
+        [('cert', 'Certification'), ('production', 'Production')],
+        string='Fiserv QR Environment',
+        default='cert',
+        tracking=True,
+    )
+    fiserv_sucursal_id = fields.Char(
+        string='Fiserv Sucursal ID',
+        tracking=True,
+        help='Branch ID in the Fiserv QR system (e.g. 36419).',
+    )
+    fiserv_caja_id = fields.Char(
+        string='Fiserv Caja ID',
+        tracking=True,
+        help='Cash register ID in the Fiserv QR system (e.g. 54137). '
+             'Must have trabajaOrdenesPago=true.',
+    )
+    fiserv_qr_string = fields.Text(
+        string='Fiserv Static QR',
+        readonly=True,
+        help='Cached static EMVCo QR string for the caja, fetched from '
+             'the Fiserv API. Reused for every transaction.',
+    )
+
     # Reverse relation to payment methods
     payment_method_ids = fields.One2many(
         'pos.payment.method', 'clover_terminal_id',
@@ -692,3 +729,191 @@ class CloverTerminal(models.Model):
             self._api_request('PUT', '/connect/v1/device/reset', connect=True, timeout=15)
         except UserError:
             pass
+
+    # ==================================================================
+    # Fiserv QR Estático API (Transferencias 3.0)
+    # ==================================================================
+
+    def _fiserv_qr_base(self):
+        """Return the Fiserv QR API base URL for the configured environment."""
+        self.ensure_one()
+        if self.fiserv_qr_environment == 'production':
+            return 'https://connect.latam.fiservapis.com/qr-latam-api/v1'
+        return 'https://connect-cert.latam.fiservapis.com/qr-latam-api/v1'
+
+    def _fiserv_qr_request(self, method, path, payload=None, params=None, timeout=30):
+        """Authenticated request to the Fiserv QR API.
+
+        Auth is the raw JWT token in the Authorization header (no prefix).
+        Every call is audit-logged to clover.transaction.log.
+        Returns parsed JSON dict. Raises UserError on failure.
+        """
+        self.ensure_one()
+        if not self.fiserv_qr_token:
+            raise UserError(_('No Fiserv QR token configured on this terminal.'))
+        url = f'{self._fiserv_qr_base()}{path}'
+        request_id = uuid.uuid4().hex[:16]
+        headers = {
+            'Authorization': self.fiserv_qr_token,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+        }
+        log_vals = {
+            'terminal_id': self.id,
+            'request_id': request_id,
+            'endpoint': path,
+            'http_method': method.upper(),
+            'request_payload': json.dumps(payload) if payload else '',
+            'status': 'pending',
+        }
+        try:
+            resp = requests.request(
+                method=method, url=url, headers=headers,
+                json=payload, params=params, timeout=timeout,
+            )
+            try:
+                body = resp.json() if resp.content else {}
+            except (ValueError, TypeError):
+                body = {}
+            if not isinstance(body, dict):
+                body = {'_raw': body}
+            log_vals['response_payload'] = json.dumps(body, default=str)
+            log_vals['http_status'] = resp.status_code
+
+            if resp.status_code in (200, 201):
+                log_vals['status'] = 'success'
+                self.env['clover.transaction.log'].sudo().create(log_vals)
+                return body
+
+            error_msg = body.get('message') or resp.text[:500]
+            log_vals.update(status='error', error_message=error_msg)
+            self.env['clover.transaction.log'].sudo().create(log_vals)
+            raise UserError(_(
+                'Fiserv QR API %(status)s: %(msg)s',
+                status=resp.status_code, msg=error_msg,
+            ))
+        except requests.exceptions.Timeout:
+            log_vals.update(status='timeout', error_message='Request timed out')
+            self.env['clover.transaction.log'].sudo().create(log_vals)
+            raise UserError(_('Fiserv QR request timed out.'))
+        except requests.exceptions.ConnectionError:
+            log_vals.update(status='error', error_message='Connection refused')
+            self.env['clover.transaction.log'].sudo().create(log_vals)
+            raise UserError(_('Cannot reach Fiserv QR API. Check network.'))
+        except UserError:
+            raise
+        except Exception as exc:
+            _logger.exception('Fiserv QR API unexpected error')
+            log_vals.update(status='error', error_message=str(exc))
+            self.env['clover.transaction.log'].sudo().create(log_vals)
+            raise UserError(_('Fiserv QR error: %s', exc))
+
+    def _fiserv_fetch_qr(self):
+        """Fetch the static EMVCo QR string for the configured caja.
+
+        Returns the QR string. Caches it on fiserv_qr_string.
+        """
+        self.ensure_one()
+        if not self.fiserv_sucursal_id or not self.fiserv_caja_id:
+            raise UserError(_('Set Fiserv Sucursal ID and Caja ID first.'))
+        result = self._fiserv_qr_request(
+            'GET',
+            f'/sucursal/{self.fiserv_sucursal_id}/caja/{self.fiserv_caja_id}/qr',
+        )
+        qr_string = result.get('qr', '')
+        if not qr_string:
+            raise UserError(_(
+                'Fiserv returned an empty QR. Verify the caja exists, has '
+                'trabajaOrdenesPago=true, and QR is enabled for this merchant.'))
+        self.fiserv_qr_string = qr_string
+        return qr_string
+
+    def action_fiserv_fetch_qr(self):
+        """Button: fetch and cache the static QR from Fiserv."""
+        self.ensure_one()
+        self._fiserv_fetch_qr()
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': _('QR Fetched'),
+                'message': _('Static QR retrieved and cached for caja %s.',
+                             self.fiserv_caja_id),
+                'type': 'success',
+                'sticky': False,
+            },
+        }
+
+    def _fiserv_create_payment_order(self, amount, reference, items=None,
+                                     expiration_time=600, notification_url=None):
+        """Create a Fiserv payment order for the given amount.
+
+        :param amount: amount as float (ARS)
+        :param reference: unique reference string for this transaction
+        :param items: optional list of dicts {name, quantity, unitPrice}
+        :param expiration_time: seconds until the order expires
+        :param notification_url: webhook URL for payment notification
+        Returns the paymentOrderUUID string.
+        """
+        self.ensure_one()
+        if not self.fiserv_caja_id:
+            raise UserError(_('No Fiserv Caja ID configured.'))
+        if not items:
+            # WARNING: unitPrice unit (pesos vs centavos) is UNVERIFIED.
+            # Confirm with one real MODO Test payment before production:
+            # create an order with a known amount and check what the wallet
+            # charges. If Fiserv expects centavos, change to int(round(amount*100)).
+            # Current assumption: integer pesos.
+            items = [{
+                'name': reference or 'POS',
+                'quantity': 1,
+                'unitPrice': int(round(amount)),
+            }]
+        payload = {
+            'cashierCode': int(self.fiserv_caja_id),
+            'expirationTime': expiration_time,
+            'items': items,
+            'reference': reference,
+        }
+        if notification_url:
+            payload['notificationURL'] = notification_url
+        result = self._fiserv_qr_request(
+            'POST',
+            '/payment-orders-managment/payment-order-cashier',
+            payload=payload,
+        )
+        order_uuid = result.get('paymentOrderUUID')
+        if not order_uuid:
+            raise UserError(_('Fiserv did not return a payment order UUID.'))
+        return order_uuid
+
+    def _fiserv_get_order_status(self, order_uuid):
+        """Return the payment order status dict from Fiserv."""
+        self.ensure_one()
+        return self._fiserv_qr_request(
+            'GET',
+            '/operations-managment/payment-order',
+            params={'uuid': order_uuid},
+        )
+
+    def _fiserv_cancel_order(self, order_uuid, reference):
+        """Expire/cancel a pending payment order."""
+        self.ensure_one()
+        return self._fiserv_qr_request(
+            'PATCH',
+            '/payment-orders-managment/expire',
+            payload={'reference': reference or order_uuid, 'uuid': order_uuid},
+        )
+
+    def _fiserv_refund(self, order_uuid, amount_to_return, reason='Refund'):
+        """Refund a paid Fiserv QR transaction (total or partial)."""
+        self.ensure_one()
+        return self._fiserv_qr_request(
+            'POST',
+            '/transaction/refund',
+            payload={
+                'uuid': order_uuid,
+                'reason': reason,
+                'amountToReturn': amount_to_return,
+            },
+        )

@@ -1,5 +1,6 @@
 import json
 import time
+import uuid
 
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError
@@ -22,6 +23,17 @@ _CLOVER_RESULT_MAP = {
     'TIMEDOUT': 'expired',
 }
 
+# Fiserv QR payment order status id → POS-facing state
+_FISERV_STATUS_MAP = {
+    'P': 'approved',   # Pagado
+    'D': 'approved',   # Acreditado
+    'A': 'pending',    # Pendiente
+    'E': 'expired',    # Expirada
+    'R': 'rejected',   # Rechazada
+    'C': 'canceled',   # Cancelada
+    'V': 'refunded',   # Devuelto
+}
+
 
 class PosPaymentMethod(models.Model):
     _inherit = 'pos.payment.method'
@@ -41,10 +53,12 @@ class PosPaymentMethod(models.Model):
     )
 
     clover_payment_type = fields.Selection(
-        [('card', 'Card Payment'), ('qr', 'QR Payment')],
+        [('card', 'Card Payment'),
+         ('qr', 'QR Payment (Device)'),
+         ('fiserv_qr', 'QR Payment (Odoo screen, Fiserv)')],
         string='Clover Payment Type',
         default='card',
-        help='Whether this method triggers a card or QR payment on the terminal.',
+        help='Card/QR via the Clover device, or Fiserv QR shown on the Odoo screen.',
     )
 
     # ------------------------------------------------------------------
@@ -212,6 +226,100 @@ class PosPaymentMethod(models.Model):
         terminal = self._get_clover_terminal()
         try:
             terminal._payment_refund(clover_payment_id, amount_cents)
+            return {'success': True}
+        except Exception as exc:
+            return {'error': str(exc)}
+
+    # ------------------------------------------------------------------
+    # Fiserv QR RPC endpoints (QR shown on Odoo screen)
+    # ------------------------------------------------------------------
+
+    def _fiserv_webhook_url(self):
+        """Public webhook URL for Fiserv payment notifications."""
+        base = self.env['ir.config_parameter'].sudo().get_param('web.base.url')
+        return f'{base}/odoo/fiserv/qr/webhook'
+
+    def fiserv_create_qr_payment(self, order_uid, amount):
+        """Create a Fiserv payment order and return the static QR to display.
+
+        :param amount: amount as float (ARS)
+        Returns {qr_string, order_uuid, reference} or {error}.
+        """
+        self.ensure_one()
+        terminal = self._get_clover_terminal()
+        try:
+            qr_string = terminal.fiserv_qr_string or terminal._fiserv_fetch_qr()
+            reference = f'{order_uid}-{uuid.uuid4().hex[:12]}'
+            order_uuid = terminal._fiserv_create_payment_order(
+                amount, reference,
+                notification_url=self._fiserv_webhook_url(),
+            )
+            # Audit row so the webhook can resolve the order later
+            self.env['clover.transaction'].sudo().create({
+                'terminal_id': terminal.id,
+                'payment_method_id': self.id,
+                'company_id': self.env.company.id,
+                'amount': int(round(amount * 100)),
+                'payment_type': 'qr',
+                'state': 'pending',
+                'clover_payment_id': order_uuid,
+                'pos_order_uid': order_uid,
+                'idempotency_key': reference,
+                'attempt_number': 1,
+            })
+            return {
+                'qr_string': qr_string,
+                'order_uuid': order_uuid,
+                'reference': reference,
+            }
+        except Exception as exc:
+            return {'error': str(exc)}
+
+    def fiserv_poll_qr_payment(self, order_uuid):
+        """Poll a Fiserv payment order status.
+
+        Returns {state, order_uuid} where state is
+        pending|approved|rejected|expired|canceled|refunded|error.
+        """
+        self.ensure_one()
+        terminal = self._get_clover_terminal()
+        try:
+            status = terminal._fiserv_get_order_status(order_uuid)
+            status_id = (status.get('status') or {}).get('id', '')
+            state = _FISERV_STATUS_MAP.get(status_id, 'pending')
+            # Keep the audit row in sync on terminal states
+            if state in ('approved', 'rejected', 'canceled', 'expired'):
+                self._fiserv_sync_transaction(order_uuid, state)
+            return {'state': state, 'order_uuid': order_uuid}
+        except Exception as exc:
+            return {'state': 'error', 'error': str(exc)}
+
+    def fiserv_cancel_qr_payment(self, order_uuid, reference=''):
+        """Cancel/expire a pending Fiserv payment order."""
+        self.ensure_one()
+        terminal = self._get_clover_terminal()
+        try:
+            terminal._fiserv_cancel_order(order_uuid, reference)
+        except Exception:
+            pass
+        self._fiserv_sync_transaction(order_uuid, 'canceled')
+        return {'success': True}
+
+    def _fiserv_sync_transaction(self, order_uuid, state):
+        """Update the matching clover.transaction audit row to ``state``."""
+        tx = self.env['clover.transaction'].sudo().search(
+            [('clover_payment_id', '=', order_uuid)], limit=1)
+        if tx and tx.state != state:
+            tx.write({'state': state})
+
+    def fiserv_refund_qr_payment(self, order_uuid, amount=None, reason='Refund'):
+        """Refund a paid Fiserv QR transaction."""
+        self.ensure_one()
+        terminal = self._get_clover_terminal()
+        try:
+            if amount is None:
+                return {'error': _('Refund amount is required.')}
+            terminal._fiserv_refund(order_uuid, amount, reason)
             return {'success': True}
         except Exception as exc:
             return {'error': str(exc)}
