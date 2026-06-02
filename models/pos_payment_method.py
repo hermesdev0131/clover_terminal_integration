@@ -148,24 +148,23 @@ class PosPaymentMethod(models.Model):
         return {'success': True}
 
     def clover_create_qr_payment(self, order_uid, amount_cents):
-        """Create a Clover order and return QR data for display.
+        """Create a Clover order for the device-QR flow.
 
-        For LATAM: generates an EMVCo Transferencias 3.0 QR from the
-        stored device template (if configured).
-        Device QR is also handled by the JS SDK (SaleRequest + presentQrcOnly).
-        Returns {qr_data, clover_order_id} or {error}.
+        The QR is generated and shown on the Clover terminal itself
+        (via SDK SaleRequest + presentQrcOnly). The Odoo dialog shows
+        the "scan on terminal" fallback.
+        Returns {clover_order_id, qr_data} or {error}. qr_data is always
+        empty — Odoo-side QR generation is handled by the Fiserv QR
+        Estático API flow (fiserv_qr payment type), not this one.
         """
         self.ensure_one()
         terminal = self._get_clover_terminal()
         try:
             clover_order_id = terminal._payment_create_clover_order(
                 amount_cents, order_uid)
-            # Try EMVCo QR generation (LATAM interoperable QR)
-            amount = amount_cents / 100.0
-            qr_data = terminal._generate_emvco_qr(amount, clover_order_id)
             return {
                 'clover_order_id': clover_order_id,
-                'qr_data': qr_data,
+                'qr_data': '',
             }
         except Exception as exc:
             return {'error': str(exc)}
