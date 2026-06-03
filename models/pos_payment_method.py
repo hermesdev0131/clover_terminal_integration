@@ -13,16 +13,6 @@ _CLOVER_SDK_SERVERS = {
     'production_la': 'https://www.la.clover.com',
 }
 
-# Clover payment `result` field → our transaction state
-_CLOVER_RESULT_MAP = {
-    'SUCCESS': 'approved',
-    'AUTH': 'approved',
-    'OFFLINE_SUCCESS': 'approved',
-    'FAIL': 'rejected',
-    'VOIDED': 'canceled',
-    'TIMEDOUT': 'expired',
-}
-
 # Fiserv QR payment order status id → POS-facing state
 _FISERV_STATUS_MAP = {
     'P': 'approved',   # Pagado
@@ -54,13 +44,11 @@ class PosPaymentMethod(models.Model):
 
     clover_payment_type = fields.Selection(
         [('card', 'Card Payment'),
-         ('qr', 'QR Payment (Device)'),
-         ('fiserv_qr', 'QR Payment (Odoo screen, Fiserv)'),
-         ('qr_both', 'QR Payment (Both screens — Device + Odoo)')],
+         ('qr', 'QR Payment')],
         string='Clover Payment Type',
         default='card',
-        help='Card/QR via the Clover device, Fiserv QR on the Odoo screen, '
-             'or both QRs displayed simultaneously (customer scans either).',
+        help='Card payments via Clover terminal, or QR shown on both the '
+             'Odoo screen and the Clover device (customer scans either).',
     )
 
     # ------------------------------------------------------------------
@@ -140,99 +128,8 @@ class PosPaymentMethod(models.Model):
         })
         return {'transaction_id': tx.id}
 
-    def clover_cancel_payment(self, clover_transaction_id):
-        """Cancel a pending Clover payment."""
-        self.ensure_one()
-        tx = self.env['clover.transaction'].sudo().browse(clover_transaction_id)
-        if not tx.exists() or tx.state in ('approved', 'canceled'):
-            return {'success': True}
-        tx.write({'state': 'canceled'})
-        return {'success': True}
-
-    def clover_create_qr_payment(self, order_uid, amount_cents):
-        """Create a Clover order for the device-QR flow.
-
-        The QR is generated and shown on the Clover terminal itself
-        (via SDK SaleRequest + presentQrcOnly). The Odoo dialog shows
-        the "scan on terminal" fallback.
-        Returns {clover_order_id, qr_data} or {error}. qr_data is always
-        empty — Odoo-side QR generation is handled by the Fiserv QR
-        Estático API flow (fiserv_qr payment type), not this one.
-        """
-        self.ensure_one()
-        terminal = self._get_clover_terminal()
-        try:
-            clover_order_id = terminal._payment_create_clover_order(
-                amount_cents, order_uid)
-            return {
-                'clover_order_id': clover_order_id,
-                'qr_data': '',
-            }
-        except Exception as exc:
-            return {'error': str(exc)}
-
-    def clover_poll_qr_payment(self, clover_order_id, clover_payment_id):
-        """Poll QR payment status. Returns {state, clover_payment_id}.
-
-        state: 'pending' | 'approved' | 'rejected' | 'canceled'
-        """
-        self.ensure_one()
-        terminal = self._get_clover_terminal()
-        try:
-            # Try direct payment status first
-            if clover_payment_id:
-                payment = terminal._payment_get_status(clover_payment_id)
-                result_str = payment.get('result', '')
-                state = _CLOVER_RESULT_MAP.get(result_str, 'pending')
-                return {
-                    'state': state,
-                    'clover_payment_id': clover_payment_id,
-                    'card_type': payment.get('cardTransaction', {}).get('cardType', ''),
-                    'card_last4': payment.get('cardTransaction', {}).get('last4', ''),
-                }
-            # Fallback: check order payments (for async QR)
-            payments = terminal._payment_get_order_payments(clover_order_id)
-            for p in payments:
-                result_str = p.get('result', '')
-                state = _CLOVER_RESULT_MAP.get(result_str, 'pending')
-                if state == 'approved':
-                    return {
-                        'state': 'approved',
-                        'clover_payment_id': p.get('id', ''),
-                        'card_type': p.get('cardTransaction', {}).get('cardType', ''),
-                        'card_last4': p.get('cardTransaction', {}).get('last4', ''),
-                    }
-            return {'state': 'pending', 'clover_payment_id': clover_payment_id}
-        except Exception as exc:
-            return {'state': 'error', 'error': str(exc)}
-
-    def clover_cancel_qr_payment(self, clover_order_id):
-        """Cancel a pending QR payment by resetting the terminal."""
-        self.ensure_one()
-        terminal = self._get_clover_terminal()
-        try:
-            terminal._payment_cancel_on_terminal()
-        except Exception:
-            pass
-        return {'success': True}
-
-    def clover_refund_payment(self, clover_payment_id, amount_cents=None):
-        """Refund an approved Clover payment via REST v3.
-
-        Called from CloverPaymentInterface.send_payment_reversal().
-        If ``amount_cents`` is None, performs a full refund.
-        Returns ``{'success': True}`` or ``{'error': <msg>}``.
-        """
-        self.ensure_one()
-        terminal = self._get_clover_terminal()
-        try:
-            terminal._payment_refund(clover_payment_id, amount_cents)
-            return {'success': True}
-        except Exception as exc:
-            return {'error': str(exc)}
-
     # ------------------------------------------------------------------
-    # Fiserv QR RPC endpoints (QR shown on Odoo screen)
+    # Fiserv QR RPC endpoints (QR shown on Odoo + Clover device screen)
     # ------------------------------------------------------------------
 
     def _fiserv_webhook_url(self):
