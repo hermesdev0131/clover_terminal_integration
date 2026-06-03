@@ -49,6 +49,11 @@ export class CloverPaymentInterface extends PaymentInterface {
         console.log(`[Clover] === Payment request: ${paymentType}, amount: ${line.amount}, uuid: ${uuid} ===`);
 
         try {
+            // Dual: QR on both Odoo and device, customer scans either
+            if (paymentType === "qr_both") {
+                return await this._executeDualQRPayment(line, order);
+            }
+
             // Fiserv QR: QR shown on Odoo screen, no device involved
             if (paymentType === "fiserv_qr") {
                 return await this._executeFiservQRPayment(line, order);
@@ -613,6 +618,128 @@ export class CloverPaymentInterface extends PaymentInterface {
         });
     }
 
+    // ------------------------------------------------------------------
+    // Dual QR Payment (QR on Odoo + device simultaneously)
+    // First side to complete wins; the other is cancelled.
+    // Graceful degradation: if device unavailable, falls back to Odoo-only.
+    // ------------------------------------------------------------------
+
+    async _executeDualQRPayment(line, order) {
+        const amountCents = Math.round(line.amount * 100);
+        console.log(`[Dual] QR payment: ${line.amount} ARS`);
+
+        // 1. Create Fiserv API payment order (always — this is the Odoo QR side)
+        const apiResult = await this._rpc("fiserv_create_qr_payment", [
+            order.uid || "", line.amount,
+        ]);
+        if (apiResult.error) {
+            this._showError(apiResult.error);
+            line.set_payment_status("retry");
+            return false;
+        }
+        const { qr_string, order_uuid, reference } = apiResult;
+        this._fiservOrderUuid = order_uuid;
+        this._fiservReference = reference;
+        console.log("[Dual] Fiserv order:", order_uuid);
+
+        // 2. Show QR on Odoo
+        this._openQRDialog(line, order, qr_string);
+        line.set_payment_status("waiting");
+
+        // 3. Try to bring up the device QR in parallel (best-effort).
+        //    If device is offline or SDK fails, the Odoo QR still works.
+        let deviceActive = false;
+        try {
+            if (!this._sdkConfig) {
+                this._sdkConfig = await this._fetchSdkConfig();
+            }
+            if (!this._sdkConfig?.error) {
+                const connector = await this._getConnector();
+                if (!this._cancelled && connector) {
+                    const sdk = window.clover;
+                    const saleRequest = new sdk.remotepay.SaleRequest();
+                    saleRequest.setExternalId(sdk.CloverID.getNewId());
+                    saleRequest.setAmount(amountCents);
+                    saleRequest.setAllowOfflinePayment(false);
+                    saleRequest.setApproveOfflinePaymentWithoutPrompt(false);
+                    if (typeof saleRequest.setPresentQrcOnly === "function") {
+                        saleRequest.setPresentQrcOnly(true);
+                    } else {
+                        saleRequest.setCardEntryMethods(0);
+                    }
+                    if (typeof saleRequest.setDisableReceiptSelection === "function") {
+                        saleRequest.setDisableReceiptSelection(true);
+                    }
+                    saleRequest.setRegionalExtras({ currency: "ARS" });
+                    this._pendingSaleRequest = saleRequest;
+                    this._retryCount = 0;
+                    connector.sale(saleRequest);
+                    deviceActive = true;
+                    console.log("[Dual] Device QR active");
+                }
+            }
+        } catch (e) {
+            console.warn("[Dual] Device side unavailable, continuing Odoo-only:", e);
+        }
+        if (!deviceActive) {
+            console.warn("[Dual] Falling back to Odoo-only QR");
+        }
+
+        // 4. Wait for either side to complete.
+        return new Promise((resolve) => {
+            this._pendingLine = line;
+            this._pendingResolve = resolve;
+            this._pendingOrder = order;
+            this._pendingPaymentType = "qr_both";
+
+            const deadline = Date.now() + FISERV_PAYMENT_TIMEOUT_MS;
+
+            const pollOnce = async () => {
+                if (this._cancelled) return;
+                if (Date.now() > deadline) {
+                    // Total timeout — cancel both sides
+                    if (this._connector && this._connectorReady) {
+                        try { this._connector.resetDevice(); } catch (_e) {}
+                    }
+                    this._closeQRDialog();
+                    this._showError(_t("QR payment timed out."));
+                    this._finishFiserv(false, line, "expired");
+                    return;
+                }
+                let poll;
+                try {
+                    poll = await this._rpc("fiserv_poll_qr_payment", [order_uuid]);
+                } catch (_e) {
+                    poll = { state: "error" };
+                }
+                if (this._cancelled) return;
+                console.log("[Dual] Poll:", poll.state);
+                if (poll.state === "approved") {
+                    // Odoo QR side won — cancel device sale
+                    if (this._connector && this._connectorReady) {
+                        try { this._connector.resetDevice(); } catch (_e) {}
+                    }
+                    this._closeQRDialog();
+                    line.transaction_id = order_uuid;
+                    line.set_payment_status("done");
+                    this._logTransaction(order, "qr", amountCents,
+                        order_uuid, "approved", poll, "QR", "", "");
+                    this._finishFiserv(true, line, "approved");
+                } else if (["rejected", "expired", "canceled"].includes(poll.state)) {
+                    // Odoo side dead — but device may still complete.
+                    // Stop polling but DON'T resolve; onSaleResponse may still fire.
+                    console.log("[Dual] API order ended:", poll.state,
+                        "— device side may still complete");
+                    // No reschedule
+                } else {
+                    // 'pending' / 'error' → schedule next poll
+                    this._fiservPollTimer = setTimeout(pollOnce, FISERV_POLL_INTERVAL_MS);
+                }
+            };
+            this._fiservPollTimer = setTimeout(pollOnce, FISERV_POLL_INTERVAL_MS);
+        });
+    }
+
     _finishFiserv(success, line, _state) {
         const resolve = this._pendingResolve;
         this._pendingResolve = null;
@@ -662,19 +789,45 @@ export class CloverPaymentInterface extends PaymentInterface {
         }
 
         const line = this._pendingLine;
-        const resolvePayment = this._pendingResolve;
         const order = this._pendingOrder;
         const paymentType = this._pendingPaymentType;
+        const isDual = paymentType === "qr_both";
+        const payment = response.getPayment();
+        this._retryCount = 0;
+
+        // In dual mode, device failure does NOT end the payment — the
+        // Odoo-side polling may still complete. Just log and let polling
+        // continue (or full timeout resolve it).
+        if (isDual && !(success && payment)) {
+            const reason = response.getReason?.() || response.getMessage?.() ||
+                _t("Device QR declined.");
+            console.log("[Dual] Device side ended without success:",
+                reason, "— Odoo polling continues");
+            this._logTransaction(order, paymentType, 0, "",
+                "rejected", response, "", "", reason);
+            return;
+        }
+
+        const resolvePayment = this._pendingResolve;
         this._pendingLine = null;
         this._pendingResolve = null;
         this._pendingOrder = null;
         this._pendingPaymentType = null;
-        this._retryCount = 0;
 
         // Close QR dialog if open
         this._closeQRDialog();
 
-        const payment = response.getPayment();
+        // In dual mode, device-side win → cancel the API order
+        if (isDual && success && payment) {
+            this._stopFiservPolling();
+            if (this._fiservOrderUuid) {
+                this._rpc("fiserv_cancel_qr_payment", [
+                    this._fiservOrderUuid, this._fiservReference || "",
+                ]).catch(() => {});
+                this._fiservOrderUuid = null;
+                this._fiservReference = null;
+            }
+        }
 
         if (success && payment) {
             const cloverPaymentId = payment.getId() || "";

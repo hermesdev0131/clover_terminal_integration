@@ -55,10 +55,12 @@ class PosPaymentMethod(models.Model):
     clover_payment_type = fields.Selection(
         [('card', 'Card Payment'),
          ('qr', 'QR Payment (Device)'),
-         ('fiserv_qr', 'QR Payment (Odoo screen, Fiserv)')],
+         ('fiserv_qr', 'QR Payment (Odoo screen, Fiserv)'),
+         ('qr_both', 'QR Payment (Both screens — Device + Odoo)')],
         string='Clover Payment Type',
         default='card',
-        help='Card/QR via the Clover device, or Fiserv QR shown on the Odoo screen.',
+        help='Card/QR via the Clover device, Fiserv QR on the Odoo screen, '
+             'or both QRs displayed simultaneously (customer scans either).',
     )
 
     # ------------------------------------------------------------------
