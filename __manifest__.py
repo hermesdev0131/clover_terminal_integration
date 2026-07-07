@@ -2,33 +2,51 @@
 
 {
     'name': 'Clover Terminal Integration',
-    'version': '18.0.1.0.0',
+    'version': '18.0.2.0.0',
     'category': 'Point of Sale',
-    'summary': 'Clover Flex 4 terminal integration with directed Card and QR payment modes',
+    'summary': 'Clover Flex 4 card payments and Fiserv Transferencias 3.0 QR '
+               'displayed on both the Odoo screen and the Clover device',
     'description': """
-Clover Terminal Integration
-============================
+Clover Terminal Integration (Argentina)
+========================================
 
-This module integrates Clover Flex 4 payment terminals with Odoo 18 Point of Sale,
-enabling directed Card and QR payment flows with full device control.
+Integrates Clover Flex 4 payment terminals and the Fiserv QR Estático API
+(Transferencias 3.0) with Odoo 18 Point of Sale for the LATAM/Argentina market.
 
-Key Features:
--------------
-* Dual payment methods: Clover Card and Clover QR
-* Forced payment mode on device (no customer selection screen)
-* QR mirroring: same QR displayed on device and POS screen
-* Real-time payment status tracking with order locking
-* Refund and void support via Clover API
-* Transaction audit logging for every API call
-* Error recovery dashboard
+Payment Methods
+---------------
+* **Card Payment** — chip, contactless, and magstripe via the Clover Flex 4
+  through the Remote Pay Cloud SDK.
+* **QR Payment** — the same static caja QR is displayed on the Odoo POS screen
+  and on the Clover device screen simultaneously. The customer scans either
+  one and the payment confirms in Odoo within a few seconds. If the device is
+  offline the flow degrades gracefully to Odoo-only QR without failing.
 
-Technical Details:
-------------------
-* Remote Pay Cloud SDK integration (WebSocket via Cloud Pay Display)
-* OAuth 2.0 token management
-* Per-transaction settings: presentQrcOnly, CardEntryMethods
-* OWL 2 frontend components (PaymentInterface pattern)
-* Multi-session safety with idempotency keys
+Fiserv QR Estático API
+----------------------
+* Static QR per caja fetched from the QR Estático API and cached.
+* Per-transaction payment orders (POST /payment-order-cashier) with a unique
+  reference and configurable expiration.
+* Payment status polling (GET /operations-managment/payment-order) with the
+  Fiserv status codes (P/A/E/R/C/D/V) mapped to POS states.
+* Webhook endpoint (/odoo/fiserv/qr/webhook) with an optional IP allowlist
+  system parameter for source validation.
+* Refunds via POST /transaction/refund routed through the API when the payment
+  came from the Odoo QR side.
+
+Technical Details
+-----------------
+* Clover Remote Pay Cloud SDK integration (WebSocket via Cloud Pay Display)
+  for card and device-side QR payments.
+* setDisableReceiptSelection(true) on every SaleRequest so onSaleResponse
+  fires immediately after approval, no manual receipt dismissal on the device.
+* OAuth 2.0 for Clover; JWT bearer for the Fiserv QR Estático API.
+* OWL 2 frontend components (PaymentInterface pattern).
+* Transaction audit log (clover.transaction and clover.transaction.log) for
+  every REST call, success or error, both Clover and Fiserv sides.
+* QR rendered locally via Odoo's built-in /report/barcode endpoint (no
+  external QR service).
+* Multi-session safety with UUID-based idempotency keys.
     """,
     'author': 'Hiroshi, WolfAIX',
     'website': 'https://www.wolfaix.com',
